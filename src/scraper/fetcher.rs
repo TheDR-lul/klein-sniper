@@ -19,7 +19,7 @@ pub struct ScraperImpl {
 
 impl ScraperImpl {
     pub fn new() -> Self {
-        let random_user_agent = USER_AGENTS.choose(&mut rand::thread_rng()).unwrap();
+        let random_user_agent = USER_AGENTS.choose(&mut rand::rng()).unwrap();
 
         let client = Client::builder()
             .user_agent(random_user_agent.to_string())
@@ -37,10 +37,14 @@ impl ScraperImpl {
 
     fn build_url(&self, req: &ScrapeRequest, page: usize) -> String {
         let kebab_query = req.query.to_lowercase().replace(" ", "-");
-        format!(
-            "https://www.kleinanzeigen.de/s-{}/{}?page={}",
-            kebab_query, req.category_id, page
-        )
+        if page == 1 {
+            format!("https://www.kleinanzeigen.de/s-{}/{}", kebab_query, req.category_id)
+        } else {
+            format!(
+                "https://www.kleinanzeigen.de/s-{}/{}?page={}",
+                kebab_query, req.category_id, page
+            )
+        }
     }
 
     async fn apply_delay(&self) {
@@ -55,7 +59,7 @@ impl Scraper for ScraperImpl {
         let item_selector = Selector::parse("li.ad-listitem")
             .map_err(|e| ScraperError::HtmlParseError(e.to_string()))?;
 
-        for page in 1..=20 {
+        for page in 1.. {
             self.apply_delay().await;
             let url = self.build_url(req, page);
             tracing::info!("Fetching URL: {}", url);
