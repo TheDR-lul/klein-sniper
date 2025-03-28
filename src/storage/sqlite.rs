@@ -38,7 +38,7 @@ impl SqliteStorage {
             "
         )?;
 
-        // Автомиграции (на случай если таблицы были созданы ранее)
+        // Автомиграции
         Self::migrate_add_column_if_missing(&conn, "offers", "location", "TEXT NOT NULL DEFAULT ''")?;
         Self::migrate_add_column_if_missing(&conn, "offers", "description", "TEXT NOT NULL DEFAULT ''")?;
 
@@ -55,14 +55,14 @@ impl SqliteStorage {
         let existing_columns: Vec<String> = stmt
             .query_map([], |row| row.get::<_, String>(1))?
             .collect::<Result<_, _>>()?;
-    
+
         if !existing_columns.iter().any(|c| c == column) {
             let alter_sql = format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, column_def);
             conn.execute(&alter_sql, [])?;
         }
-    
+
         Ok(())
-    }    
+    }
 
     pub fn save_offer(&self, offer: &Offer) -> Result<(), StorageError> {
         self.conn.execute(
@@ -80,6 +80,19 @@ impl SqliteStorage {
                 &offer.description,
             ],
         )?;
+        Ok(())
+    }
+
+    pub fn delete_missing_offers(&self, current_ids: &[String]) -> Result<(), StorageError> {
+        if current_ids.is_empty() {
+            self.conn.execute("DELETE FROM offers", [])?;
+            return Ok(());
+        }
+
+        let placeholders = current_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!("DELETE FROM offers WHERE id NOT IN ({})", placeholders);
+        let mut stmt = self.conn.prepare(&sql)?;
+        stmt.execute(rusqlite::params_from_iter(current_ids))?;
         Ok(())
     }
 
@@ -166,7 +179,7 @@ impl SqliteStorage {
             "SELECT id, title, price, model, link, posted_at, fetched_at, location, description
              FROM offers WHERE price > 0 ORDER BY price ASC LIMIT 5",
         )?;
-    
+
         let rows = stmt.query_map([], |row| {
             let posted_at_str: String = row.get(5)?;
             let fetched_at_str: String = row.get(6)?;
@@ -182,15 +195,14 @@ impl SqliteStorage {
                 description: row.get(8)?,
             })
         })?;
-    
+
         let mut offers = Vec::new();
         for offer in rows {
             offers.push(offer?);
         }
-    
+
         Ok(offers)
     }
-    
 
     pub fn get_average_prices(&self) -> Result<Vec<(String, f64)>, StorageError> {
         let mut stmt = self.conn.prepare(

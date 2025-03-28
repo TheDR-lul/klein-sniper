@@ -40,10 +40,7 @@ impl ScraperImpl {
         if page == 1 {
             format!("https://www.kleinanzeigen.de/s-{}/{}", kebab_query, req.category_id)
         } else {
-            format!(
-                "https://www.kleinanzeigen.de/s-{}/{}?page={}",
-                kebab_query, req.category_id, page
-            )
+            format!("https://www.kleinanzeigen.de/s-seite:{}/{}/{}", page, kebab_query, req.category_id)
         }
     }
 
@@ -56,38 +53,45 @@ impl ScraperImpl {
 impl Scraper for ScraperImpl {
     async fn fetch(&self, req: &ScrapeRequest) -> Result<String, ScraperError> {
         let mut full_html = String::new();
-        let item_selector = Selector::parse("li.ad-listitem")
-            .map_err(|e| ScraperError::HtmlParseError(e.to_string()))?;
+        let item_selector = Selector::parse("li.ad-listitem").map_err(|e| ScraperError::HtmlParseError(e.to_string()))?;
+        let ad_id_selector = Selector::parse("article.aditem").unwrap();
+
+        let mut last_first_ad_id: Option<String> = None;
 
         for page in 1.. {
             self.apply_delay().await;
             let url = self.build_url(req, page);
             tracing::info!("Fetching URL: {}", url);
 
-            let response = self
-                .client
-                .get(&url)
-                .send()
-                .await
-                .map_err(|e| ScraperError::HttpError(e.to_string()))?;
-
+            let response = self.client.get(&url).send().await.map_err(|e| ScraperError::HttpError(e.to_string()))?;
             let status = response.status();
-            let html = response
-                .text()
-                .await
-                .map_err(|e| ScraperError::HttpError(e.to_string()))?;
+            let html = response.text().await.map_err(|e| ScraperError::HttpError(e.to_string()))?;
 
             if !status.is_success() {
                 return Err(ScraperError::InvalidResponse(html));
             }
 
             let doc = Html::parse_document(&html);
-            let count = doc.select(&item_selector).count();
-            tracing::debug!("Page {} had {} items", page, count);
+            let items: Vec<_> = doc.select(&item_selector).collect();
+            tracing::debug!("Page {} had {} items", page, items.len());
 
-            if count == 0 {
+            if items.is_empty() {
                 break;
             }
+
+            let first_ad_id = doc
+                .select(&ad_id_selector)
+                .next()
+                .and_then(|n| n.value().attr("data-adid"))
+                .map(|s| s.to_string());
+
+            if let (Some(current), Some(last)) = (&first_ad_id, &last_first_ad_id) {
+                if current == last {
+                    tracing::info!("Detected duplicate first item. Stopping at page {}", page);
+                    break;
+                }
+            }
+            last_first_ad_id = first_ad_id;
 
             full_html.push_str(&html);
         }
