@@ -1,6 +1,7 @@
 // Kleinanzeigen-specific HTML parsing
 use crate::model::{Offer, ParserError};
 use chrono::Utc;
+use crate::scraper::{Scraper, ScraperImpl};  // Правильный импорт
 use scraper::{Html, Selector};
 
 pub trait Parser {
@@ -19,7 +20,8 @@ impl Parser for KleinanzeigenParser {
     fn parse(&self, html: &str) -> Result<Vec<Offer>, ParserError> {
         let document = Html::parse_document(html);
 
-        let item_selector = Selector::parse("article.aditem").map_err(|e| ParserError::HtmlParseError(e.to_string()))?;
+        let item_selector = Selector::parse("article.aditem")
+            .map_err(|e| ParserError::HtmlParseError(e.to_string()))?;
         let title_selector = Selector::parse("a.ellipsis").unwrap();
         let price_selector = Selector::parse("p.aditem-main--middle--price-shipping").unwrap();
 
@@ -32,8 +34,16 @@ impl Parser for KleinanzeigenParser {
             if let (Some(title_node), Some(price_node)) = (title_elem, price_elem) {
                 let title = title_node.inner_html().trim().to_string();
                 let link = title_node.value().attr("href").unwrap_or("").to_string();
+
+                // Парсим цену безопасно, заменяя нежелательные символы
                 let price_text = price_node.text().collect::<String>();
-                let price = price_text.replace("€", "").replace(".", "").trim().replace(",", ".").parse::<f64>().unwrap_or(0.0);
+                let price = price_text
+                    .replace("€", "")
+                    .replace(".", "")
+                    .trim()
+                    .replace(",", ".")
+                    .parse::<f64>()
+                    .unwrap_or(0.0);
 
                 let offer = Offer {
                     id: link.clone(),
