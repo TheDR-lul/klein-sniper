@@ -1,0 +1,29 @@
+# Rust build
+/target/
+**/*.rs.bk
+**/*.rs.bak
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# System
+.DS_Store
+Thumbs.db
+
+# Binaries
+*.exe
+*.out
+*.app
+
+# Logs
+*.log
+
+# Config
+config.json
+data.db
+
+# Cargo
+Cargo.lock
