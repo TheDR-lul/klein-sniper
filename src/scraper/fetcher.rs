@@ -29,7 +29,6 @@ impl ScraperImpl {
     }
 
     async fn apply_delay(&self) {
-        // Задержка между запросами (например, 1 секунда)
         sleep(Duration::from_secs(1)).await;
     }
 }
@@ -47,13 +46,16 @@ impl Scraper for ScraperImpl {
             .await
             .map_err(|e| ScraperError::HttpError(e.to_string()))?;
 
-        if !response.status().is_success() {
-            return Err(ScraperError::InvalidResponse);
-        }
-
-        response
+        let status = response.status();
+        let html = response
             .text()
             .await
-            .map_err(|e| ScraperError::HttpError(e.to_string()))
+            .map_err(|e| ScraperError::HttpError(e.to_string()))?;
+
+        if !status.is_success() {
+            return Err(ScraperError::InvalidResponse(html));
+        }
+
+        Ok(html)
     }
 }

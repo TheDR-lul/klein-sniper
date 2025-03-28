@@ -37,7 +37,7 @@ pub struct ScrapeRequest {
 pub enum ScraperError {
     HttpError(String),
     Timeout,
-    InvalidResponse,
+    InvalidResponse(String),
 }
 
 /// Ошибки, возникающие при разборе HTML

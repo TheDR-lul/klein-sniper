@@ -24,6 +24,7 @@ use tokio::time::{sleep, Duration};
 use tracing::{info, error, warn};
 use tracing_subscriber;
 use std::fs;
+use std::path::Path;
 
 #[tokio::main]
 async fn main() {
@@ -80,26 +81,51 @@ async fn main() {
 
             let html = match scraper.fetch(&request).await {
                 Ok(html) => html,
+                Err(model::ScraperError::InvalidResponse(html)) => {
+                    warn!("Invalid server response");
+            
+                    let folder = Path::new("logs/html");
+                    if let Err(e) = fs::create_dir_all(folder) {
+                        warn!("Failed to create debug folder: {e}");
+                    } else {
+                        let filename = folder.join(format!("debug-{}.html", model_cfg.query.replace(' ', "_")));
+                        if let Err(e) = fs::write(&filename, html) {
+                            warn!("Failed to save debug HTML: {e}");
+                        } else {
+                            info!("Saved debug HTML: {}", filename.display());
+                        }
+                    }
+            
+                    continue;
+                }
                 Err(e) => {
                     match e {
                         model::ScraperError::Timeout => warn!("Timeout while fetching page"),
                         model::ScraperError::HttpError(msg) => warn!("HTTP error: {msg}"),
-                        model::ScraperError::InvalidResponse => warn!("Invalid server response"),
+                        _ => warn!("Unexpected error"),
                     }
                     continue;
                 }
             };
+            
 
             let mut offers = match parser.parse(&html) {
                 Ok(o) => o,
                 Err(e) => {
+                    let path = format!("debug-{}.html", model_cfg.query.replace(" ", "_"));
+                    if let Err(write_err) = fs::write(&path, &html) {
+                        warn!("Failed to write debug HTML to {path}: {write_err:?}");
+                    } else {
+                        warn!("🧩 HTML сохранён в файл: {}", path);
+                    }
+            
                     match e {
                         model::ParserError::HtmlParseError(msg) => warn!("HTML parse error: {msg}"),
                         model::ParserError::MissingField(field) => warn!("Missing field: {field}"),
                     }
                     continue;
                 }
-            };
+            };            
 
             normalize_all(&mut offers, &config.models);
 
