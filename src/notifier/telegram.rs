@@ -1,11 +1,36 @@
-use crate::model::{Offer, NotifyError};
+use crate::model::{NotifyError, Offer};
 use reqwest::{Client, Error};
+use serde::Deserialize;
 use std::time::Duration;
+use tokio::time::sleep;
+
+#[derive(Debug, Deserialize)]
+struct TelegramApiResponse {
+    result: Vec<TelegramUpdate>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TelegramUpdate {
+    update_id: i64,
+    message: TelegramMessage,
+}
+
+#[derive(Debug, Deserialize)]
+struct TelegramMessage {
+    chat: TelegramChat,
+    text: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TelegramChat {
+    id: i64,
+}
 
 pub struct TelegramNotifier {
     bot_token: String,
     chat_id: i64,
     client: Client,
+    offset: i64,
 }
 
 impl TelegramNotifier {
@@ -19,6 +44,7 @@ impl TelegramNotifier {
             bot_token,
             chat_id,
             client,
+            offset: 0,
         }
     }
 
@@ -28,15 +54,11 @@ impl TelegramNotifier {
 
         let text = text.to_string();
         let params = [
-            ("chat_id", &self.chat_id.to_string()),
-            ("text", &text),
+            ("chat_id", self.chat_id.to_string()),
+            ("text", text),
         ];
 
-        self.client
-            .post(&url)
-            .form(&params)
-            .send()
-            .await?;
+        self.client.post(&url).form(&params).send().await?;
 
         Ok(())
     }
@@ -54,8 +76,8 @@ impl TelegramNotifier {
         );
 
         let params = [
-            ("chat_id", &self.chat_id.to_string()),
-            ("text", &message),
+            ("chat_id", self.chat_id.to_string()),
+            ("text", message),
         ];
 
         let response = self
@@ -71,5 +93,45 @@ impl TelegramNotifier {
         }
 
         Ok(())
+    }
+
+    /// Слушает команды от пользователя
+    pub async fn listen_for_commands(&mut self) {
+        let url = format!("https://api.telegram.org/bot{}/getUpdates", self.bot_token);
+
+        loop {
+            let response = self
+                .client
+                .get(&url)
+                .query(&[("offset", self.offset + 1)])
+                .send()
+                .await;
+
+            if let Ok(resp) = response {
+                if let Ok(api_response) = resp.json::<TelegramApiResponse>().await {
+                    for update in api_response.result {
+                        if let Some(text) = update.message.text.as_deref() {
+                            match text {
+                                "/ping" => {
+                                    let _ = self.notify_text("✅ Я на связи!").await;
+                                }
+                                "/status" => {
+                                    let _ = self
+                                        .notify_text("📊 Анализатор работает. Ждём следующую проверку.")
+                                        .await;
+                                }
+                                _ => {
+                                    let _ = self.notify_text("🤖 Неизвестная команда.").await;
+                                }
+                            }
+                        }
+
+                        self.offset = update.update_id;
+                    }
+                }
+            }
+
+            sleep(Duration::from_secs(5)).await;
+        }
     }
 }

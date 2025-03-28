@@ -11,12 +11,14 @@ use analyzer::AnalyzerImpl;
 use crate::analyzer::price_analysis::Analyzer;
 use config::load_config;
 use model::ScrapeRequest;
-use scraper::ScraperImpl;
+use scraper::{Scraper, ScraperImpl};
 use parser::KleinanzeigenParser;
 use normalizer::normalize_all;
 use notifier::TelegramNotifier;
 use storage::SqliteStorage;
 use tokio::time::{sleep, Duration};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
@@ -34,9 +36,17 @@ async fn main() {
     let parser = KleinanzeigenParser::new();
     let analyzer = AnalyzerImpl::new();
     let storage = SqliteStorage::new("data.db").unwrap();
-    let notifier = TelegramNotifier::new(config.telegram_bot_token.clone(), config.telegram_chat_id);
+    let notifier = Arc::new(Mutex::new(
+        TelegramNotifier::new(config.telegram_bot_token.clone(), config.telegram_chat_id),
+    ));
 
-    if let Err(e) = notifier.notify_text("🚀 KleinSniper запущен!").await {
+    // 3. Запуск слушателя команд Telegram
+    let command_notifier = notifier.clone();
+    tokio::spawn(async move {
+        command_notifier.lock().await.listen_for_commands().await;
+    });
+
+    if let Err(e) = notifier.lock().await.notify_text("🚀 KleinSniper запущен!").await {
         eprintln!("⚠ Ошибка при отправке стартового уведомления: {:?}", e);
     }
 
@@ -123,7 +133,7 @@ async fn main() {
                     }
                 }
 
-                if let Err(e) = notifier.notify(&offer).await {
+                if let Err(e) = notifier.lock().await.notify(&offer).await {
                     eprintln!("⚠ Ошибка при отправке в Telegram: {:?}", e);
                 } else if let Err(e) = storage.mark_notified(&offer.id) {
                     eprintln!("⚠ Ошибка при отметке уведомления: {:?}", e);

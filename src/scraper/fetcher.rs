@@ -1,4 +1,5 @@
 use crate::model::{ScrapeRequest, ScraperError};
+use crate::scraper::traits::Scraper;
 use reqwest::{Client, header};
 use tokio::time::{sleep, Duration};
 
@@ -31,8 +32,11 @@ impl ScraperImpl {
         // Задержка между запросами (например, 1 секунда)
         sleep(Duration::from_secs(1)).await;
     }
+}
 
-    pub async fn fetch(&self, req: &ScrapeRequest) -> Result<String, ScraperError> {
+#[async_trait::async_trait]
+impl Scraper for ScraperImpl {
+    async fn fetch(&self, req: &ScrapeRequest) -> Result<String, ScraperError> {
         self.apply_delay().await;
 
         let url = self.build_url(req);
