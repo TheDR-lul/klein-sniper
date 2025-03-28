@@ -1,5 +1,5 @@
 use crate::model::{Offer, NotifyError};
-use reqwest::Client;
+use reqwest::{Client, Error};
 use std::time::Duration;
 
 pub struct TelegramNotifier {
@@ -22,6 +22,26 @@ impl TelegramNotifier {
         }
     }
 
+    /// Уведомление произвольным текстом (например, при запуске)
+    pub async fn notify_text(&self, text: &str) -> Result<(), Error> {
+        let url = format!("https://api.telegram.org/bot{}/sendMessage", self.bot_token);
+
+        let text = text.to_string();
+        let params = [
+            ("chat_id", &self.chat_id.to_string()),
+            ("text", &text),
+        ];
+
+        self.client
+            .post(&url)
+            .form(&params)
+            .send()
+            .await?;
+
+        Ok(())
+    }
+
+    /// Уведомление по конкретному предложению
     pub async fn notify(&self, offer: &Offer) -> Result<(), NotifyError> {
         let url = format!(
             "https://api.telegram.org/bot{}/sendMessage",

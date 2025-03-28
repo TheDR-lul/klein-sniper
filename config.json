@@ -1,13 +1,13 @@
 {
   "telegram_bot_token": "8191253017:AAG8uiNV12E5Uz265TEtZf5JW6ec771RhOw",
-  "telegram_chat_id": 123456789,
+  "telegram_chat_id": 1303971877,
   "models": [
     {
       "query": "rog ally",
       "category_id": "k0",
       "deviation_threshold": 0.2,
       "min_price_delta": 100,
-      "min_price": 300,
+      "min_price": 240,
       "max_price": 800,
       "match_keywords": ["z1 extreme", "extreme"]
     },
@@ -16,10 +16,10 @@
       "category_id": "k0",
       "deviation_threshold": 0.2,
       "min_price_delta": 100,
-      "min_price": 300,
+      "min_price": 200,
       "max_price": 800,
       "match_keywords": ["z1"]
     }
   ],
-  "check_interval_seconds": 600
+  "check_interval_seconds": 60
 }
