@@ -30,12 +30,12 @@ impl SqliteStorage {
         Ok(())
     }
 
-    pub fn is_notified(&self, offer_id: &str) -> bool {
+    pub fn is_notified(&self, offer_id: &str) -> Result<bool, rusqlite::Error> {
         let mut stmt = self.conn.prepare("SELECT 1 FROM notified WHERE offer_id = ?1")?;
-        let rows = stmt.query_map(params![offer_id], |row| row.get::<_, i64>(0))?;
-
-        rows.into_iter().next().is_some()
-    }
+        let mut rows = stmt.query(params![offer_id])?;
+    
+        Ok(rows.next()?.is_some())
+    }    
 
     pub fn mark_notified(&self, offer_id: &str) -> Result<()> {
         self.conn.execute(

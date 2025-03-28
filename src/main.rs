@@ -46,7 +46,7 @@ async fn main() {
             category_id: model_cfg.category_id.clone(),
         };
 
-        let html = match scraper.fetch(&request) {
+        let html = match scraper.fetch(&request).await {
             Ok(html) => html,
             Err(e) => {
                 eprintln!("❌ Ошибка при получении HTML: {:?}", e);
@@ -64,7 +64,20 @@ async fn main() {
 
         normalize_all(&mut offers, &config.models);
 
+        // Сохраняем все предложения в базу
+        for offer in &offers {
+            if let Err(e) = storage.save_offer(offer) {
+                eprintln!("⚠ Ошибка сохранения оффера: {:?}", e);
+            }
+        }
+
         let stats = analyzer.calculate_stats(&offers);
+
+        // Обновляем статистику в БД
+        if let Err(e) = storage.update_stats(&stats) {
+            eprintln!("⚠ Ошибка обновления статистики: {:?}", e);
+        }
+
         let good_offers = analyzer.find_deals(&offers, &stats, model_cfg);
 
         println!(
@@ -78,9 +91,15 @@ async fn main() {
             println!("💸 {} — {:.2} €", offer.title, offer.price);
             println!("🔗 {}", offer.link);
 
-            // Отправляем уведомление
+            if let Ok(true) = storage.is_notified(&offer.id) {
+                println!("⏩ Уже отправлено ранее, пропускаем.");
+                continue;
+            }
+
             if let Err(e) = notifier.notify(&offer).await {
                 eprintln!("⚠ Ошибка уведомления: {:?}", e);
+            } else if let Err(e) = storage.mark_notified(&offer.id) {
+                eprintln!("⚠ Ошибка пометки уведомления: {:?}", e);
             }
         }
 
