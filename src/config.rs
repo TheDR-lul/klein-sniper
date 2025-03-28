@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::fs;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct ModelConfig {
     pub query: String,
     pub category_id: String,
