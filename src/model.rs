@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc,ParseError};
 use thiserror::Error;
 use rusqlite;
 
@@ -55,18 +55,14 @@ pub enum StorageError {
 
     #[error("🔍 Не найдено")]
     NotFound,
+
+    #[error("📅 Ошибка парсинга даты: {0}")]
+    ParseError(#[from] ParseError),
 }
 
 // Автоматическое преобразование rusqlite::Error в StorageError
 impl From<rusqlite::Error> for StorageError {
     fn from(err: rusqlite::Error) -> Self {
-        StorageError::DatabaseError(err.to_string())
-    }
-}
-
-// Автоматическое преобразование chrono::ParseError в StorageError
-impl From<chrono::ParseError> for StorageError {
-    fn from(err: chrono::ParseError) -> Self {
         StorageError::DatabaseError(err.to_string())
     }
 }

@@ -13,3 +13,5 @@ scraper = "0.23.1"
 rusqlite = { version = "0.34.0", features = ["chrono","bundled"] }
 thiserror = "2.0.12"
 async-trait = "0.1.88"
+tracing ="0.1.41"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
