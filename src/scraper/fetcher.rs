@@ -1,5 +1,5 @@
+// HTTP logic with headers and delays
 use crate::model::{ScrapeRequest, ScraperError};
-
 use reqwest::Client;
 
 pub trait Scraper {
