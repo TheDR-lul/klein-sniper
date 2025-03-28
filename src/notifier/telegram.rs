@@ -1,7 +1,6 @@
-// Telegram bot implementation
-
-use crate::model::Offer;
-use reqwest::{Client, Error};
+use crate::model::{Offer, NotifyError};
+use reqwest::Client;
+use std::time::Duration;
 
 pub struct TelegramNotifier {
     bot_token: String,
@@ -11,7 +10,11 @@ pub struct TelegramNotifier {
 
 impl TelegramNotifier {
     pub fn new(bot_token: String, chat_id: i64) -> Self {
-        let client = Client::new();
+        let client = Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .expect("❌ Не удалось создать HTTP клиент");
+
         Self {
             bot_token,
             chat_id,
@@ -19,25 +22,33 @@ impl TelegramNotifier {
         }
     }
 
-    pub async fn notify(&self, offer: &Offer) -> Result<(), Error> {
+    pub async fn notify(&self, offer: &Offer) -> Result<(), NotifyError> {
         let url = format!(
             "https://api.telegram.org/bot{}/sendMessage",
             self.bot_token
         );
 
+        let message = format!(
+            "💸 Найдено выгодное предложение!\n\n📦 Модель: {}\n💰 Цена: {:.2} €\n🔗 Ссылка: {}",
+            offer.model, offer.price, offer.link
+        );
+
         let params = [
             ("chat_id", &self.chat_id.to_string()),
-            ("text", &format!(
-                "💸 Найдено выгодное предложение!\n\n📦 Модель: {}\n💰 Цена: {:.2} €\n🔗 Ссылка: {}",
-                offer.model, offer.price, offer.link
-            )),
+            ("text", &message),
         ];
 
-        let _response = self.client
+        let response = self
+            .client
             .post(&url)
             .form(&params)
             .send()
-            .await?;
+            .await
+            .map_err(|e| NotifyError::ApiError(format!("Ошибка запроса: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(NotifyError::Unreachable);
+        }
 
         Ok(())
     }
