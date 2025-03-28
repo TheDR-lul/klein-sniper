@@ -1,5 +1,25 @@
 {
   "telegram_bot_token": "123:abc...",
-  "telegram_chat_id": 12345678,
-  "models": []
+  "telegram_chat_id": 123456789,
+  "models": [
+    {
+      "query": "rog ally",
+      "category_id": "k0",
+      "deviation_threshold": 0.2,
+      "min_price_delta": 100,
+      "min_price": 300,
+      "max_price": 800,
+      "match_keywords": ["z1 extreme", "extreme"]
+    },
+    {
+      "query": "rog ally",
+      "category_id": "k0",
+      "deviation_threshold": 0.2,
+      "min_price_delta": 100,
+      "min_price": 300,
+      "max_price": 800,
+      "match_keywords": ["z1"]
+    }
+  ],
+  "check_interval_seconds": 600
 }

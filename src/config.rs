@@ -9,6 +9,7 @@ pub struct ModelConfig {
     pub min_price_delta: f64,
     pub min_price: f64,
     pub max_price: f64,
+    pub match_keywords: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
