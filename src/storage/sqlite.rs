@@ -164,9 +164,9 @@ impl SqliteStorage {
     pub fn get_top5_offers(&self) -> Result<Vec<Offer>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, title, price, model, link, posted_at, fetched_at, location, description
-             FROM offers ORDER BY price ASC LIMIT 5",
+             FROM offers WHERE price > 0 ORDER BY price ASC LIMIT 5",
         )?;
-
+    
         let rows = stmt.query_map([], |row| {
             let posted_at_str: String = row.get(5)?;
             let fetched_at_str: String = row.get(6)?;
@@ -182,14 +182,15 @@ impl SqliteStorage {
                 description: row.get(8)?,
             })
         })?;
-
+    
         let mut offers = Vec::new();
         for offer in rows {
             offers.push(offer?);
         }
-
+    
         Ok(offers)
     }
+    
 
     pub fn get_average_prices(&self) -> Result<Vec<(String, f64)>, StorageError> {
         let mut stmt = self.conn.prepare(

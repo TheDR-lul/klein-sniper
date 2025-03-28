@@ -1,7 +1,8 @@
 use crate::model::{ScrapeRequest, ScraperError};
 use crate::scraper::traits::Scraper;
 use reqwest::{Client, header};
-use rand::prelude::*; // Правильный импорт для использования choose
+use rand::prelude::*;
+use scraper::{Html, Selector};
 use tokio::time::{sleep, Duration};
 
 const USER_AGENTS: [&str; 5] = [
@@ -18,11 +19,10 @@ pub struct ScraperImpl {
 
 impl ScraperImpl {
     pub fn new() -> Self {
-        // Случайно выбираем User-Agent из списка
-        let random_user_agent = USER_AGENTS.choose(&mut rand::rng()).unwrap(); 
+        let random_user_agent = USER_AGENTS.choose(&mut rand::thread_rng()).unwrap();
 
         let client = Client::builder()
-            .user_agent(random_user_agent.to_string())  // Исправление: конвертируем строку в строку типа String
+            .user_agent(random_user_agent.to_string())
             .default_headers({
                 let mut headers = header::HeaderMap::new();
                 headers.insert(header::ACCEPT_LANGUAGE, "en-US,en;q=0.9".parse().unwrap());
@@ -35,9 +35,12 @@ impl ScraperImpl {
         Self { client }
     }
 
-    fn build_url(&self, req: &ScrapeRequest) -> String {
+    fn build_url(&self, req: &ScrapeRequest, page: usize) -> String {
         let kebab_query = req.query.to_lowercase().replace(" ", "-");
-        format!("https://www.kleinanzeigen.de/s-{}/{}", kebab_query, req.category_id)
+        format!(
+            "https://www.kleinanzeigen.de/s-{}/{}?page={}",
+            kebab_query, req.category_id, page
+        )
     }
 
     async fn apply_delay(&self) {
@@ -48,29 +51,43 @@ impl ScraperImpl {
 #[async_trait::async_trait]
 impl Scraper for ScraperImpl {
     async fn fetch(&self, req: &ScrapeRequest) -> Result<String, ScraperError> {
-        self.apply_delay().await;
+        let mut full_html = String::new();
+        let item_selector = Selector::parse("li.ad-listitem")
+            .map_err(|e| ScraperError::HtmlParseError(e.to_string()))?;
 
-        let url = self.build_url(req);
+        for page in 1..=20 {
+            self.apply_delay().await;
+            let url = self.build_url(req, page);
+            tracing::info!("Fetching URL: {}", url);
 
-        // Логируем URL, по которому будет осуществлен запрос
-        tracing::info!("Fetching URL: {}", url);
+            let response = self
+                .client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| ScraperError::HttpError(e.to_string()))?;
 
-        let response = self.client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| ScraperError::HttpError(e.to_string()))?;
+            let status = response.status();
+            let html = response
+                .text()
+                .await
+                .map_err(|e| ScraperError::HttpError(e.to_string()))?;
 
-        let status = response.status();
-        let html = response
-            .text()
-            .await
-            .map_err(|e| ScraperError::HttpError(e.to_string()))?;
+            if !status.is_success() {
+                return Err(ScraperError::InvalidResponse(html));
+            }
 
-        if !status.is_success() {
-            return Err(ScraperError::InvalidResponse(html));
+            let doc = Html::parse_document(&html);
+            let count = doc.select(&item_selector).count();
+            tracing::debug!("Page {} had {} items", page, count);
+
+            if count == 0 {
+                break;
+            }
+
+            full_html.push_str(&html);
         }
 
-        Ok(html)
+        Ok(full_html)
     }
 }

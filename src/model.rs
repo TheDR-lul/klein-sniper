@@ -38,6 +38,7 @@ pub enum ScraperError {
     HttpError(String),
     Timeout,
     InvalidResponse(String),
+    HtmlParseError(String),
 }
 
 /// Ошибки, возникающие при разборе HTML
