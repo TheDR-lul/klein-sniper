@@ -32,7 +32,7 @@ impl SqliteStorage {
                 std_dev REAL NOT NULL,
                 last_updated TEXT NOT NULL
             );
-            ",
+            "
         )?;
 
         Ok(Self { conn })
@@ -105,4 +105,76 @@ impl SqliteStorage {
         )?;
         Ok(())
     }
+    
+    pub fn get_last_offer(&self) -> Result<Option<Offer>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, price, model, link, posted_at, fetched_at, location, description
+             FROM offers ORDER BY fetched_at DESC LIMIT 1",
+        )?;
+    
+        let mut rows = stmt.query([])?;
+        if let Some(row) = rows.next()? {
+            let offer = Offer {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                price: row.get(2)?,
+                model: row.get(3)?,
+                link: row.get(4)?,
+                posted_at: row.get::<_, String>(5)?.parse::<DateTime<Utc>>()?,
+                fetched_at: row.get::<_, String>(6)?.parse::<DateTime<Utc>>()?,
+                location: row.get(7)?,
+                description: row.get(8)?,
+            };
+            Ok(Some(offer))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn get_top5_offers(&self) -> Result<Vec<Offer>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, price, model, link, posted_at, fetched_at, location, description
+             FROM offers ORDER BY price ASC LIMIT 5",
+        )?;
+    
+        let rows = stmt.query_map([], |row| {
+            Ok(Offer {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                price: row.get(2)?,
+                model: row.get(3)?,
+                link: row.get(4)?,
+                posted_at: row.get::<_, String>(5)?.parse::<DateTime<Utc>>()?,
+                fetched_at: row.get::<_, String>(6)?.parse::<DateTime<Utc>>()?,
+                location: row.get(7)?,
+                description: row.get(8)?,
+            })
+        })?;
+    
+        let mut offers = Vec::new();
+        for offer in rows {
+            offers.push(offer?);
+        }
+    
+        Ok(offers)
+    }    
+    
+    pub fn get_average_prices(&self) -> Result<Vec<(String, f64)>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT model, avg_price FROM model_stats ORDER BY model ASC",
+        )?;
+    
+        let rows = stmt.query_map([], |row| {
+            let model: String = row.get(0)?;
+            let avg_price: f64 = row.get(1)?;
+            Ok((model, avg_price))
+        })?;
+    
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+    
+        Ok(results)
+    }    
 }

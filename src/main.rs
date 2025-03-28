@@ -37,7 +37,7 @@ async fn main() {
     let analyzer = AnalyzerImpl::new();
     let storage = SqliteStorage::new("data.db").unwrap();
     let notifier = Arc::new(Mutex::new(
-        TelegramNotifier::new(config.telegram_bot_token.clone(), config.telegram_chat_id),
+        TelegramNotifier::new(config.telegram_bot_token.clone(), config.telegram_chat_id).await,
     ));
 
     // 3. Запуск слушателя команд Telegram
