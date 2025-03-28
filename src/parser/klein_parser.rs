@@ -1,12 +1,6 @@
-// Kleinanzeigen-specific HTML parsing
 use crate::model::{Offer, ParserError};
+use scraper::{Html, Selector}; 
 use chrono::Utc;
-use crate::scraper::{Scraper, ScraperImpl};  // Правильный импорт
-use scraper::{Html, Selector};
-
-pub trait Parser {
-    fn parse(&self, html: &str) -> Result<Vec<Offer>, ParserError>;
-}
 
 pub struct KleinanzeigenParser;
 
@@ -14,14 +8,10 @@ impl KleinanzeigenParser {
     pub fn new() -> Self {
         Self
     }
-}
 
-impl Parser for KleinanzeigenParser {
-    fn parse(&self, html: &str) -> Result<Vec<Offer>, ParserError> {
+    pub fn parse(&self, html: &str) -> Result<Vec<Offer>, ParserError> {
         let document = Html::parse_document(html);
-
-        let item_selector = Selector::parse("article.aditem")
-            .map_err(|e| ParserError::HtmlParseError(e.to_string()))?;
+        let item_selector = Selector::parse("article.aditem").map_err(|e| ParserError::HtmlParseError(e.to_string()))?;
         let title_selector = Selector::parse("a.ellipsis").unwrap();
         let price_selector = Selector::parse("p.aditem-main--middle--price-shipping").unwrap();
 
@@ -35,7 +25,6 @@ impl Parser for KleinanzeigenParser {
                 let title = title_node.inner_html().trim().to_string();
                 let link = title_node.value().attr("href").unwrap_or("").to_string();
 
-                // Парсим цену безопасно, заменяя нежелательные символы
                 let price_text = price_node.text().collect::<String>();
                 let price = price_text
                     .replace("€", "")
@@ -48,10 +37,10 @@ impl Parser for KleinanzeigenParser {
                 let offer = Offer {
                     id: link.clone(),
                     title,
-                    description: String::new(), // пока пусто
+                    description: String::new(),
                     price,
                     location: String::new(),
-                    model: String::new(), // нормализуем позже
+                    model: String::new(),
                     link: format!("https://www.kleinanzeigen.de{}", link),
                     posted_at: Utc::now(),
                     fetched_at: Utc::now(),

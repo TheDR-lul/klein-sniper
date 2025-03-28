@@ -10,7 +10,7 @@ mod storage;
 use analyzer::AnalyzerImpl;
 use config::load_config;
 use model::ScrapeRequest;
-use scraper::{Scraper, ScraperImpl};
+use scraper::ScraperImpl;
 use parser::KleinanzeigenParser;
 use crate::analyzer::price_analysis::Analyzer;
 use normalizer::normalize_all;

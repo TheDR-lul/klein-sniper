@@ -1,3 +1,3 @@
 pub mod fetcher;
 
-pub use fetcher::{Scraper, ScraperImpl};
+pub use fetcher::ScraperImpl;
