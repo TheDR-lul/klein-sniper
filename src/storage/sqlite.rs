@@ -9,6 +9,7 @@ pub struct SqliteStorage {
 impl SqliteStorage {
     pub fn new(db_path: &str) -> Result<Self, StorageError> {
         let conn = Connection::open(db_path)?;
+
         conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS offers (
@@ -19,8 +20,8 @@ impl SqliteStorage {
                 link TEXT NOT NULL,
                 posted_at TEXT NOT NULL,
                 fetched_at TEXT NOT NULL,
-                location TEXT NOT NULL,
-                description TEXT NOT NULL
+                location TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS notified (
@@ -37,8 +38,31 @@ impl SqliteStorage {
             "
         )?;
 
+        // Автомиграции (на случай если таблицы были созданы ранее)
+        Self::migrate_add_column_if_missing(&conn, "offers", "location", "TEXT NOT NULL DEFAULT ''")?;
+        Self::migrate_add_column_if_missing(&conn, "offers", "description", "TEXT NOT NULL DEFAULT ''")?;
+
         Ok(Self { conn })
     }
+
+    fn migrate_add_column_if_missing(
+        conn: &Connection,
+        table: &str,
+        column: &str,
+        column_def: &str,
+    ) -> Result<(), StorageError> {
+        let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
+        let existing_columns: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<_, _>>()?;
+    
+        if !existing_columns.iter().any(|c| c == column) {
+            let alter_sql = format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, column_def);
+            conn.execute(&alter_sql, [])?;
+        }
+    
+        Ok(())
+    }    
 
     pub fn save_offer(&self, offer: &Offer) -> Result<(), StorageError> {
         self.conn.execute(
