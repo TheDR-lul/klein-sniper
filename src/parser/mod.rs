@@ -1,3 +1,3 @@
-// Parser modulepub mod klein_parser;
+pub mod klein_parser;
 
-pub use klein_parser::{Parser, KleinanzeigenParser};
+pub use klein_parser::KleinanzeigenParser;

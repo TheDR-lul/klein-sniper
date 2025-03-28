@@ -7,11 +7,12 @@ mod normalizer;
 mod notifier;
 mod storage;
 
+use analyzer::AnalyzerImpl;
 use config::load_config;
 use model::ScrapeRequest;
-use scraper::ScrapeImpl;
+use scraper::{Scraper, ScraperImpl};
 use parser::KleinanzeigenParser;
-use analyzer::AnalyzerImpl;
+use crate::analyzer::price_analysis::Analyzer;
 use normalizer::normalize_all;
 use notifier::TelegramNotifier;
 use storage::SqliteStorage;
