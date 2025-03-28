@@ -4,9 +4,10 @@ use crate::config::AppConfig;
 use reqwest::{Client, Error};
 use serde::Deserialize;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::Mutex;
+use std::time::{Duration, Instant};
+use tokio::sync::{Mutex, Notify};
 use tokio::time::sleep;
+
 #[derive(Debug, Deserialize)]
 struct TelegramApiResponse {
     result: Vec<TelegramUpdate>,
@@ -36,11 +37,18 @@ pub struct TelegramNotifier {
     offset: i64,
     storage: Arc<Mutex<SqliteStorage>>,
     config: Arc<AppConfig>,
-
+    start_time: Instant,
+    refresh_notify: Arc<Notify>,
 }
 
 impl TelegramNotifier {
-    pub fn new(bot_token: String, chat_id: i64, storage: Arc<Mutex<SqliteStorage>>,   config: Arc<AppConfig>,) -> Self {
+    pub fn new(
+        bot_token: String,
+        chat_id: i64,
+        storage: Arc<Mutex<SqliteStorage>>,
+        config: Arc<AppConfig>,
+        refresh_notify: Arc<Notify>,
+    ) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
@@ -53,16 +61,17 @@ impl TelegramNotifier {
             offset: 0,
             storage,
             config,
+            start_time: Instant::now(),
+            refresh_notify,
         }
     }
 
     pub async fn notify_text(&self, text: &str) -> Result<(), Error> {
         let url = format!("https://api.telegram.org/bot{}/sendMessage", self.bot_token);
 
-        let text = text.to_string();
         let params = [
             ("chat_id", self.chat_id.to_string()),
-            ("text", text),
+            ("text", text.to_string()),
         ];
 
         self.client.post(&url).form(&params).send().await?;
@@ -121,6 +130,18 @@ impl TelegramNotifier {
                                 }
                                 "/help" => {
                                     let _ = self.notify_text("📋 Доступные команды:\n/ping — проверить подключение\n/status — статус анализатора\n/help — список команд\n/last — последнее выгодное предложение\n/top5 — топ 5 предложений\n/avg — средняя цена\n/config — текущая конфигурация\n/refresh — ручной перезапуск\n/uptime — аптайм сервиса").await;
+                                }
+                                "/refresh" => {
+                                    self.refresh_notify.notify_one();
+                                    let _ = self.notify_text("🔄 Принудительный перезапуск запущен.").await;
+                                }
+                                "/uptime" => {
+                                    let uptime = self.start_time.elapsed();
+                                    let hours = uptime.as_secs() / 3600;
+                                    let minutes = (uptime.as_secs() % 3600) / 60;
+                                    let seconds = uptime.as_secs() % 60;
+                                    let msg = format!("⏱ Аптайм: {:02}:{:02}:{:02}", hours, minutes, seconds);
+                                    let _ = self.notify_text(&msg).await;
                                 }
                                 "/last" => {
                                     match self.storage.lock().await.get_last_offer() {
