@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Notify};
 use tokio::time::sleep;
+use tracing::{info, warn};
 use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
@@ -69,31 +70,49 @@ impl TelegramNotifier {
 
     pub async fn notify_text(&self, text: &str) -> Result<(), Error> {
         let url = format!("https://api.telegram.org/bot{}/sendMessage", self.bot_token);
+
         let params = [
             ("chat_id", self.chat_id.to_string()),
             ("text", text.to_string()),
         ];
+
         self.client.post(&url).form(&params).send().await?;
         Ok(())
     }
 
     pub async fn notify(&self, offer: &Offer) -> Result<(), NotifyError> {
         let url = format!("https://api.telegram.org/bot{}/sendMessage", self.bot_token);
+    
         let message = format!(
             "💸 Найдено выгодное предложение!\n\n📦 Модель: {}\n💰 Цена: {:.2} €\n🔗 Ссылка: {}",
             offer.model, offer.price, offer.link
         );
+    
         let params = [
             ("chat_id", self.chat_id.to_string()),
-            ("text", message),
+            ("text", message.clone()),
         ];
-        let response = self.client.post(&url).form(&params).send().await
+    
+        tracing::info!("📤 Sending Telegram notification: {}", message);
+    
+        let response = self
+            .client
+            .post(&url)
+            .form(&params)
+            .send()
+            .await
             .map_err(|e| NotifyError::ApiError(format!("Ошибка запроса: {}", e)))?;
+    
         if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_else(|_| "unknown".into());
+            tracing::warn!("❌ Telegram error [{}]: {}", status, body);
             return Err(NotifyError::Unreachable);
         }
+    
         Ok(())
     }
+    
 
     pub async fn listen_for_commands(&mut self) {
         let url = format!("https://api.telegram.org/bot{}/getUpdates", self.bot_token);
