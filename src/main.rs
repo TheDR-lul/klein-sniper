@@ -25,12 +25,12 @@ use tracing::{info, error, warn};
 use tracing_subscriber;
 use std::fs;
 use std::path::Path;
+use std::collections::HashSet;
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    // 1. Загрузка конфигурации
     let config = match load_config("config.json") {
         Ok(cfg) => cfg,
         Err(e) => {
@@ -40,7 +40,6 @@ async fn main() {
     };
     let config = Arc::new(config);
 
-    // 2. Инициализация модулей
     let scraper = ScraperImpl::new();
     let parser = KleinanzeigenParser::new();
     let analyzer = AnalyzerImpl::new();
@@ -54,7 +53,6 @@ async fn main() {
         refresh_notify.clone(),
     )));
 
-    // 3. Запуск слушателя команд Telegram
     let command_notifier = notifier.clone();
     tokio::spawn(async move {
         command_notifier.lock().await.listen_for_commands().await;
@@ -83,7 +81,6 @@ async fn main() {
                 Ok(html) => html,
                 Err(model::ScraperError::InvalidResponse(html)) => {
                     warn!("Invalid server response");
-            
                     let folder = Path::new("logs/html");
                     if let Err(e) = fs::create_dir_all(folder) {
                         warn!("Failed to create debug folder: {e}");
@@ -95,7 +92,6 @@ async fn main() {
                             info!("Saved debug HTML: {}", filename.display());
                         }
                     }
-            
                     continue;
                 }
                 Err(e) => {
@@ -107,9 +103,8 @@ async fn main() {
                     continue;
                 }
             };
-            
 
-            let mut offers = match parser.parse(&html) {
+            let mut offers = match parser.parse_filtered(&html, model_cfg) {
                 Ok(o) => o,
                 Err(e) => {
                     let path = format!("debug-{}.html", model_cfg.query.replace(" ", "_"));
@@ -118,28 +113,35 @@ async fn main() {
                     } else {
                         warn!("🧩 HTML сохранён в файл: {}", path);
                     }
-            
                     match e {
                         model::ParserError::HtmlParseError(msg) => warn!("HTML parse error: {msg}"),
                         model::ParserError::MissingField(field) => warn!("Missing field: {field}"),
                     }
                     continue;
                 }
-            };            
+            };
 
             normalize_all(&mut offers, &config.models);
 
+            let mut seen_ids = HashSet::new();
+
             for offer in &offers {
+                seen_ids.insert(offer.id.clone());
                 if let Err(e) = storage.lock().await.save_offer(offer) {
                     warn!("DB save error: {e:?}");
                 }
             }
 
+            let seen_ids_vec: Vec<String> = seen_ids.iter().cloned().collect();
+            if let Err(e) = storage.lock().await.delete_missing_offers(&seen_ids_vec) {
+                warn!("Failed to delete missing offers: {e:?}");
+            }
             let stats = analyzer.calculate_stats(&offers);
 
             if let Err(e) = storage.lock().await.update_stats(&stats) {
                 warn!("Failed to update stats: {e:?}");
             }
+            
 
             let good_offers = analyzer.find_deals(&offers, &stats, model_cfg);
 

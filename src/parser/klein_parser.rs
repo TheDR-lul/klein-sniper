@@ -1,4 +1,5 @@
 use crate::model::{Offer, ParserError};
+use crate::config::ModelConfig;
 use scraper::{Html, Selector};
 use chrono::Utc;
 use tracing::{info, warn};
@@ -10,7 +11,7 @@ impl KleinanzeigenParser {
         Self
     }
 
-    pub fn parse(&self, html: &str) -> Result<Vec<Offer>, ParserError> {
+    pub fn parse_filtered(&self, html: &str, cfg: &ModelConfig) -> Result<Vec<Offer>, ParserError> {
         let document = Html::parse_document(html);
         let item_selector = Selector::parse("li.ad-listitem").map_err(|e| ParserError::HtmlParseError(e.to_string()))?;
         let title_selector = Selector::parse("h2.text-module-begin a.ellipsis").unwrap();
@@ -48,6 +49,15 @@ impl KleinanzeigenParser {
                 .to_string();
 
             let price = price_text.parse::<f64>().unwrap_or(0.0);
+
+            if price < cfg.min_price || price > cfg.max_price {
+                continue;
+            }
+
+            let title_lower = title.to_lowercase();
+            if !cfg.match_keywords.iter().any(|kw| title_lower.contains(&kw.to_lowercase())) {
+                continue;
+            }
 
             let offer = Offer {
                 id: link_raw.to_string(),
