@@ -10,6 +10,7 @@ mod notifier;
 mod storage;
 
 use analyzer::AnalyzerImpl;
+use notifier::telegram::check_and_notify_cheapest_for_model;
 use crate::analyzer::price_analysis::Analyzer;
 use config::load_config;
 use model::ScrapeRequest;
@@ -18,14 +19,16 @@ use parser::KleinanzeigenParser;
 use normalizer::normalize_all;
 use notifier::TelegramNotifier;
 use storage::SqliteStorage;
+
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::path::Path;
+use std::fs;
+
 use tokio::sync::{Mutex, Notify};
 use tokio::time::{sleep, Duration};
-use tracing::{info, error, warn};
+use tracing::{info, warn, error};
 use tracing_subscriber;
-use std::fs;
-use std::path::Path;
-use std::collections::HashSet;
 
 #[tokio::main]
 async fn main() {
@@ -52,21 +55,25 @@ async fn main() {
         config.clone(),
         refresh_notify.clone(),
     )));
+    let best_deal_ids = Arc::new(Mutex::new(HashMap::<String, String>::new()));
 
+    // Запуск Telegram команд
     let command_notifier = notifier.clone();
     tokio::spawn(async move {
         command_notifier.lock().await.listen_for_commands().await;
     });
 
+    // Стартовое сообщение
     if let Err(e) = notifier.lock().await.notify_text("🚀 KleinSniper запущен!").await {
         warn!("Failed to send startup notification: {e:?}");
     }
 
     loop {
+        info!("🔁 Entering main loop...");
         info!("Starting new analysis cycle for {} model(s)...", config.models.len());
 
         for model_cfg in &config.models {
-            info!("Processing model: {}", model_cfg.query);
+            info!("🔄 Processing model: {}", model_cfg.query);
 
             let request = ScrapeRequest {
                 query: model_cfg.query.clone(),
@@ -136,13 +143,22 @@ async fn main() {
             if let Err(e) = storage.lock().await.delete_missing_offers(&seen_ids_vec) {
                 warn!("Failed to delete missing offers: {e:?}");
             }
+
             let stats = analyzer.calculate_stats(&offers);
 
             if let Err(e) = storage.lock().await.update_stats(&stats) {
                 warn!("Failed to update stats: {e:?}");
             }
-            
 
+            // 💸 Проверка на самую дешёвую
+            check_and_notify_cheapest_for_model(
+                &model_cfg.query,
+                storage.clone(),
+                notifier.clone(),
+                best_deal_ids.clone(),
+            ).await;
+
+            // 🔍 Отправка выгодных предложений
             let good_offers = analyzer.find_deals(&offers, &stats, model_cfg);
 
             info!("📊 {} | Avg: {:.2} € | StdDev: {:.2} | Found: {}", stats.model, stats.avg_price, stats.std_dev, good_offers.len());
@@ -172,11 +188,13 @@ async fn main() {
             info!("[done] Finished model: {}", model_cfg.query);
         }
 
-        info!("[wait] Sleeping for {} seconds", config.check_interval_seconds);
+        info!("🛏 Sleeping or waiting for /refresh...");
         tokio::select! {
-            _ = sleep(Duration::from_secs(config.check_interval_seconds)) => {},
+            _ = sleep(Duration::from_secs(config.check_interval_seconds)) => {
+                info!("🔁 Loop restart triggered by timer.");
+            },
             _ = refresh_notify.notified() => {
-                info!("[refresh] Manual refresh triggered");
+                info!("🔁 Loop restart triggered by manual refresh.");
             }
         }
     }

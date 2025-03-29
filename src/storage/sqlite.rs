@@ -204,6 +204,49 @@ impl SqliteStorage {
         Ok(offers)
     }
 
+    pub fn get_all_offers(&self) -> Result<Vec<Offer>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, price, model, link, posted_at, fetched_at, location, description
+             FROM offers",
+        )?;
+    
+        let rows = stmt.query_map([], |row| {
+            let posted_at_str: String = row.get(5)?;
+            let fetched_at_str: String = row.get(6)?;
+            Ok(Offer {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                price: row.get(2)?,
+                model: row.get(3)?,
+                link: row.get(4)?,
+                posted_at: posted_at_str
+                    .parse()
+                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+                        5,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    ))?,
+                fetched_at: fetched_at_str
+                    .parse()
+                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+                        6,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    ))?,
+                location: row.get(7)?,
+                description: row.get(8)?,
+            })
+        })?;
+    
+        let mut offers = Vec::new();
+        for offer in rows {
+            offers.push(offer?);
+        }
+    
+        Ok(offers)
+    }
+    
+
     pub fn get_average_prices(&self) -> Result<Vec<(String, f64)>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT model, avg_price FROM model_stats ORDER BY model ASC",

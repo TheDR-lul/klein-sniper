@@ -13,7 +13,7 @@ fn normalize_offer(offer: &mut Offer, models: &[ModelConfig]) {
     for model in models {
         for keyword in &model.match_keywords {
             if title.contains(&keyword.to_lowercase()) {
-                offer.model = keyword.to_string(); // либо model.query.clone()
+                offer.model = model.query.clone(); // ✅ фикс: теперь присваивается основное имя из конфига
                 return;
             }
         }
