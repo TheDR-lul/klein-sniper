@@ -5,7 +5,7 @@
     {
       "query": "rog ally",
       "category_id": "k0",
-      "deviation_threshold": 0.2,
+      "deviation_threshold": 0.3,
       "min_price_delta": 100,
       "min_price": 150,
       "max_price": 800,
@@ -14,12 +14,21 @@
     {
       "query": "MSI Claw",
       "category_id": "k0",
-      "deviation_threshold": 0.2,
+      "deviation_threshold": 0.3,
       "min_price_delta": 100,
       "min_price": 150,
-      "max_price": 800,
+      "max_price": 400,
       "match_keywords": ["Claw", "8", "Ai"]
-    }
-  ],
-  "check_interval_seconds": 60
+    },
+    {
+    "query": "RTX 3090",
+    "category_id": "k0c161",
+    "deviation_threshold": 0.3,
+    "min_price_delta": 100,
+    "min_price": 150,
+    "max_price": 800,
+    "match_keywords": ["RTX 3090", "RTX", "3090", "GeForce"]
+  }
+],
+  "check_interval_seconds": 200
 }
