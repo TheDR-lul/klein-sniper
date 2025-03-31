@@ -183,14 +183,20 @@ async fn main() {
 
         info!("⏳ Waiting for timer ({}s) or /refresh...", config.check_interval_seconds);
 
+        let sleep_future = sleep(Duration::from_secs(config.check_interval_seconds));
+        tokio::pin!(sleep_future);
+        
+        let notified_future = refresh_notify.notified();
+        tokio::pin!(notified_future);
+        
         tokio::select! {
-            _ = sleep(Duration::from_secs(config.check_interval_seconds)) => {
+            _ = &mut sleep_future => {
                 info!("⏰ Timer triggered.");
             }
-            _ = refresh_notify.notified() => {
+            _ = &mut notified_future => {
                 info!("🔁 Manual refresh triggered.");
             }
-        }        
+        }
         
         info!("🔁 Restarting main loop...");
         

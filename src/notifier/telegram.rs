@@ -161,12 +161,13 @@ impl TelegramNotifier {
                                         warn!("❌ /help error: {e:?}");
                                     }
                                 },
-                                "/refresh" => {
-                                    self.refresh_notify.notify_one();
-                                    if let Err(e) = self.notify_text("🔄 Принудительный перезапуск запущен.").await {
-                                        warn!("❌ /refresh error: {e:?}");
-                                    }
-                                },
+                            "/refresh" => {
+                                tracing::info!("📣 /refresh command received, notifying...");
+                                self.refresh_notify.notify_one();
+                                if let Err(e) = self.notify_text("🔄 Принудительный перезапуск запущен.").await {
+                                    warn!("❌ /refresh error: {e:?}");
+                                }
+                            },
                                 "/uptime" => {
                                     let uptime = self.start_time.elapsed();
                                     let msg = format!(
