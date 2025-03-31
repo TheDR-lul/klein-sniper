@@ -8,6 +8,7 @@
 .vscode/
 *.swp
 *.swo
+.VSCodeCounter/
 
 # System
 .DS_Store
@@ -27,3 +28,5 @@ data.db
 
 # Cargo
 Cargo.lock
+
+# Counter
