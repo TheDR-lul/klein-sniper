@@ -10,7 +10,7 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 use std::collections::HashMap;
 use tokio::time::timeout;
-
+use tokio::task;
 #[derive(Debug, Deserialize)]
 struct TelegramApiResponse {
     result: Vec<TelegramUpdate>,
@@ -32,7 +32,7 @@ struct TelegramMessage {
 struct TelegramChat {
     id: i64,
 }
-
+#[derive(Clone)]
 pub struct TelegramNotifier {
     bot_token: String,
     chat_id: i64,
@@ -43,7 +43,6 @@ pub struct TelegramNotifier {
     start_time: Instant,
     refresh_notify: Arc<Notify>,
 }
-
 impl TelegramNotifier {
     pub fn new(
         bot_token: String,
@@ -137,23 +136,48 @@ impl TelegramNotifier {
                     for update in api_response.result {
                         if let Some(text) = update.message.text.as_deref() {
                             match text {
-                                "/ping" => { let _ = self.notify_text("✅ Я на связи!").await; },
-                                "/status" => { let _ = self.notify_text("📊 Анализатор работает. Ждём следующую проверку.").await; },
+                                "/ping" => {
+                                    if let Err(e) = self.notify_text("✅ Я на связи!").await {
+                                        warn!("❌ /ping error: {e:?}");
+                                    }
+                                },
+                                "/status" => {
+                                    if let Err(e) = self.notify_text("📊 Анализатор работает. Ждём следующую проверку.").await {
+                                        warn!("❌ /status error: {e:?}");
+                                    }
+                                },
                                 "/help" => {
-                                    let _ = self.notify_text("📋 Доступные команды:\n/ping — проверить подключение\n/status — статус анализатора\n/help — список команд\n/last — последнее выгодное предложение\n/top5 — топ 5 предложений\n/avg — средняя цена\n/config — текущая конфигурация\n/refresh — ручной перезапуск\n/uptime — аптайм сервиса").await;
+                                    let help_msg = "📋 Доступные команды:
+                            /ping — проверить подключение
+                            /status — статус анализатора
+                            /help — список команд
+                            /last — последнее выгодное предложение
+                            /top5 — топ 5 предложений
+                            /avg — средняя цена
+                            /config — текущая конфигурация
+                            /refresh — ручной перезапуск
+                            /uptime — аптайм сервиса";
+                                    if let Err(e) = self.notify_text(help_msg).await {
+                                        warn!("❌ /help error: {e:?}");
+                                    }
                                 },
                                 "/refresh" => {
                                     self.refresh_notify.notify_one();
-                                    let _ = self.notify_text("🔄 Принудительный перезапуск запущен.").await;
-
+                                    if let Err(e) = self.notify_text("🔄 Принудительный перезапуск запущен.").await {
+                                        warn!("❌ /refresh error: {e:?}");
+                                    }
                                 },
                                 "/uptime" => {
                                     let uptime = self.start_time.elapsed();
-                                    let hours = uptime.as_secs() / 3600;
-                                    let minutes = (uptime.as_secs() % 3600) / 60;
-                                    let seconds = uptime.as_secs() % 60;
-                                    let msg = format!("⏱ Аптайм: {:02}:{:02}:{:02}", hours, minutes, seconds);
-                                    let _ = self.notify_text(&msg).await;
+                                    let msg = format!(
+                                        "⏱ Аптайм: {:02}:{:02}:{:02}",
+                                        uptime.as_secs() / 3600,
+                                        (uptime.as_secs() % 3600) / 60,
+                                        uptime.as_secs() % 60
+                                    );
+                                    if let Err(e) = self.notify_text(&msg).await {
+                                        warn!("❌ /uptime error: {e:?}");
+                                    }
                                 },
                                 "/last" => {
                                     match self.storage.lock().await.get_last_offer() {
@@ -162,13 +186,19 @@ impl TelegramNotifier {
                                                 "🕵️ Последнее предложение:\n📦 {}\n💰 {:.2} €\n📍 {}\n🔗 {}",
                                                 offer.title, offer.price, offer.location, offer.link
                                             );
-                                            let _ = self.notify_text(&msg).await;
+                                            if let Err(e) = self.notify_text(&msg).await {
+                                                warn!("❌ /last notify error: {e:?}");
+                                            }
                                         }
                                         Ok(None) => {
-                                            let _ = self.notify_text("📭 Нет предложений в базе.").await;
+                                            if let Err(e) = self.notify_text("📭 Нет предложений в базе.").await {
+                                                warn!("❌ /last empty notify error: {e:?}");
+                                            }
                                         }
                                         Err(e) => {
-                                            let _ = self.notify_text(&format!("❌ Ошибка: {:?}", e)).await;
+                                            if let Err(send_err) = self.notify_text(&format!("❌ Ошибка: {:?}", e)).await {
+                                                warn!("❌ /last send error: {send_err:?}");
+                                            }
                                         }
                                     }
                                 },
@@ -186,13 +216,19 @@ impl TelegramNotifier {
                                                     offer.link
                                                 ));
                                             }
-                                            let _ = self.notify_text(&msg).await;
+                                            if let Err(e) = self.notify_text(&msg).await {
+                                                warn!("❌ /top5 notify error: {e:?}");
+                                            }
                                         }
                                         Ok(_) => {
-                                            let _ = self.notify_text("📭 Нет предложений в базе.").await;
+                                            if let Err(e) = self.notify_text("📭 Нет предложений в базе.").await {
+                                                warn!("❌ /top5 empty notify error: {e:?}");
+                                            }
                                         }
                                         Err(e) => {
-                                            let _ = self.notify_text(&format!("❌ Ошибка: {:?}", e)).await;
+                                            if let Err(send_err) = self.notify_text(&format!("❌ Ошибка: {:?}", e)).await {
+                                                warn!("❌ /top5 send error: {send_err:?}");
+                                            }
                                         }
                                     }
                                 },
@@ -203,43 +239,66 @@ impl TelegramNotifier {
                                             for (model, price) in prices {
                                                 msg.push_str(&format!("🔹 {} — {:.2} €\n", model, price));
                                             }
-                                            let _ = self.notify_text(&msg).await;
+                                            if let Err(e) = self.notify_text(&msg).await {
+                                                warn!("❌ /avg notify error: {e:?}");
+                                            }
                                         }
                                         Ok(_) => {
-                                            let _ = self.notify_text("📭 Нет статистики по моделям.").await;
+                                            if let Err(e) = self.notify_text("📭 Нет статистики по моделям.").await {
+                                                warn!("❌ /avg empty notify error: {e:?}");
+                                            }
                                         }
                                         Err(e) => {
-                                            let _ = self.notify_text(&format!("❌ Ошибка: {:?}", e)).await;
+                                            if let Err(send_err) = self.notify_text(&format!("❌ Ошибка: {:?}", e)).await {
+                                                warn!("❌ /avg send error: {send_err:?}");
+                                            }
                                         }
                                     }
                                 },
                                 "/config" => {
                                     if self.config.models.is_empty() {
-                                        let _ = self.notify_text("⚠️ Нет загруженных моделей в конфигурации.").await;
+                                        if let Err(e) = self.notify_text("⚠️ Нет загруженных моделей в конфигурации.").await {
+                                            warn!("❌ /config empty error: {e:?}");
+                                        }
                                     } else {
                                         let mut msg = String::from("⚙️ Загруженные модели:\n");
                                         for model in &self.config.models {
                                             msg.push_str(&format!("🔸 {} [{}]\n", model.query, model.category_id));
                                         }
-                                        let _ = self.notify_text(&msg).await;
+                                        if let Err(e) = self.notify_text(&msg).await {
+                                            warn!("❌ /config notify error: {e:?}");
+                                        }
                                     }
                                 },
                                 "/force_notify" => {
                                     match self.storage.lock().await.get_last_offer() {
                                         Ok(Some(offer)) => {
-                                            let _ = self.notify(&offer).await;
+                                            match self.notify(&offer).await {
+                                                Ok(_) => {
+                                                    let _ = self.storage.lock().await.mark_notified(&offer.id);
+                                                }
+                                                Err(e) => {
+                                                    if let Err(se) = self.notify_text(&format!("❌ Ошибка при отправке: {:?}", e)).await {
+                                                        warn!("❌ /force_notify send error: {se:?}");
+                                                    }
+                                                }
+                                            }
                                         }
                                         _ => {
-                                            let _ = self.notify_text("❌ Нет последнего оффера для уведомления.").await;
+                                            if let Err(e) = self.notify_text("❌ Нет последнего оффера для уведомления.").await {
+                                                warn!("❌ /force_notify notify error: {e:?}");
+                                            }
                                         }
                                     }
-                                }
+                                },
                                 _ => {
-                                    let _ = self.notify_text("🤖 Неизвестная команда. Введите /help для списка.").await;
+                                    if let Err(e) = self.notify_text("🤖 Неизвестная команда. Введите /help для списка.").await {
+                                        warn!("❌ unknown command notify error: {e:?}");
+                                    }
                                 }
                             }
                         }
-                        self.offset = update.update_id;
+                        self.offset = update.update_id + 1;
                     }
                 }
             }
@@ -352,4 +411,12 @@ pub async fn check_and_notify_cheapest_for_model(
     } else {
         tracing::warn!("⚠️ [cheapest] Не удалось найти минимальное предложение для '{}'", model_name);
     }
+}
+pub fn spawn_listener(notifier: Arc<Mutex<TelegramNotifier>>) {
+    tokio::spawn(async move {
+        info!("▶️ Starting Telegram listener...");
+        let mut guard = notifier.lock().await;
+        guard.listen_for_commands().await;
+        info!("🛑 Telegram listener ended.");
+    });
 }
