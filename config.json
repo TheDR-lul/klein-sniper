@@ -10,16 +10,7 @@
       "min_price": 240,
       "max_price": 800,
       "match_keywords": ["z1 extreme", "extreme", "RC71L"]
-    },
-    {
-      "query": "rog ally",
-      "category_id": "k0",
-      "deviation_threshold": 0.2,
-      "min_price_delta": 100,
-      "min_price": 200,
-      "max_price": 800,
-      "match_keywords": ["z1"]
     }
   ],
-  "check_interval_seconds": 30
+  "check_interval_seconds": 60
 }

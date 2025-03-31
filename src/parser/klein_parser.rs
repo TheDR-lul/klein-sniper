@@ -22,14 +22,14 @@ impl KleinanzeigenParser {
         for element in document.select(&item_selector) {
             let title_elem = element.select(&title_selector).next();
             if title_elem.is_none() {
-                warn!("No title found in block:\n{}", element.html());
+                //warn!("No title found in block:\n{}", element.html());
                 continue;
             }
             let title_node = title_elem.unwrap();
 
             let price_elem = element.select(&price_selector).next();
             if price_elem.is_none() {
-                warn!("No price found in block:\n{}", element.html());
+                //warn!("No price found in block:\n{}", element.html());
                 continue;
             }
             let price_node = price_elem.unwrap();
@@ -65,11 +65,11 @@ impl KleinanzeigenParser {
                 description: String::new(),
                 price,
                 location: String::new(),
-                model: String::new(),
+                model: cfg.query.clone(), // 👈 фикс
                 link,
                 posted_at: Utc::now(),
                 fetched_at: Utc::now(),
-            };
+            };            
 
             offers.push(offer);
         }

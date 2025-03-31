@@ -50,22 +50,32 @@ impl ScraperImpl {
 }
 
 #[async_trait::async_trait]
+#[async_trait::async_trait]
 impl Scraper for ScraperImpl {
     async fn fetch(&self, req: &ScrapeRequest) -> Result<String, ScraperError> {
         let mut full_html = String::new();
-        let item_selector = Selector::parse("li.ad-listitem").map_err(|e| ScraperError::HtmlParseError(e.to_string()))?;
+        let item_selector = Selector::parse("li.ad-listitem")
+            .map_err(|e| ScraperError::HtmlParseError(e.to_string()))?;
         let ad_id_selector = Selector::parse("article.aditem").unwrap();
 
         let mut last_first_ad_id: Option<String> = None;
+        let max_pages = 20;
 
-        for page in 1.. {
+        for page in 1..=max_pages {
             self.apply_delay().await;
             let url = self.build_url(req, page);
-            tracing::info!("Fetching URL: {}", url);
+            tracing::info!("📄 Fetching page {}: {}", page, url);
 
-            let response = self.client.get(&url).send().await.map_err(|e| ScraperError::HttpError(e.to_string()))?;
+            let response = match self.client.get(&url).send().await {
+                Ok(resp) => resp,
+                Err(e) => return Err(ScraperError::HttpError(e.to_string())),
+            };
+
             let status = response.status();
-            let html = response.text().await.map_err(|e| ScraperError::HttpError(e.to_string()))?;
+            let html = match response.text().await {
+                Ok(t) => t,
+                Err(e) => return Err(ScraperError::HttpError(e.to_string())),
+            };
 
             if !status.is_success() {
                 return Err(ScraperError::InvalidResponse(html));
@@ -73,9 +83,10 @@ impl Scraper for ScraperImpl {
 
             let doc = Html::parse_document(&html);
             let items: Vec<_> = doc.select(&item_selector).collect();
-            tracing::debug!("Page {} had {} items", page, items.len());
+            tracing::info!("✅ Parsed {} items from page {}", items.len(), page);
 
             if items.is_empty() {
+                tracing::info!("🛑 No items found on page {}, stopping.", page);
                 break;
             }
 
@@ -87,7 +98,7 @@ impl Scraper for ScraperImpl {
 
             if let (Some(current), Some(last)) = (&first_ad_id, &last_first_ad_id) {
                 if current == last {
-                    tracing::info!("Detected duplicate first item. Stopping at page {}", page);
+                    tracing::info!("🌀 Duplicate first item detected on page {}, stopping.", page);
                     break;
                 }
             }
@@ -96,6 +107,10 @@ impl Scraper for ScraperImpl {
             full_html.push_str(&html);
         }
 
-        Ok(full_html)
+        if full_html.is_empty() {
+            Err(ScraperError::HtmlParseError("Empty HTML collected".into()))
+        } else {
+            Ok(full_html)
+        }
     }
 }

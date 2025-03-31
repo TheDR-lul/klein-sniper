@@ -103,11 +103,20 @@ impl SqliteStorage {
     }
 
     pub fn mark_notified(&self, offer_id: &str) -> Result<(), StorageError> {
-        self.conn.execute(
-            "INSERT INTO notified (offer_id, notified_at) VALUES (?1, datetime('now'))",
+        tracing::info!("📝 Marking offer as notified: {offer_id}");
+        match self.conn.execute(
+            "INSERT OR IGNORE INTO notified (offer_id, notified_at) VALUES (?1, datetime('now'))",
             params![offer_id],
-        )?;
-        Ok(())
+        ) {
+            Ok(rows) => {
+                tracing::info!("✅ Marked as notified ({} row(s))", rows);
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!("❌ mark_notified failed: {e}");
+                Err(StorageError::DatabaseError(e.to_string()))
+            }
+        }
     }
 
     pub fn get_stats(&self, model: &str) -> Result<Option<ModelStats>, StorageError> {
@@ -206,10 +215,9 @@ impl SqliteStorage {
 
     pub fn get_all_offers(&self) -> Result<Vec<Offer>, StorageError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, price, model, link, posted_at, fetched_at, location, description
-             FROM offers",
+            "SELECT id, title, price, model, link, posted_at, fetched_at, location, description FROM offers",
         )?;
-    
+
         let rows = stmt.query_map([], |row| {
             let posted_at_str: String = row.get(5)?;
             let fetched_at_str: String = row.get(6)?;
@@ -219,33 +227,20 @@ impl SqliteStorage {
                 price: row.get(2)?,
                 model: row.get(3)?,
                 link: row.get(4)?,
-                posted_at: posted_at_str
-                    .parse()
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-                        5,
-                        rusqlite::types::Type::Text,
-                        Box::new(e),
-                    ))?,
-                fetched_at: fetched_at_str
-                    .parse()
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-                        6,
-                        rusqlite::types::Type::Text,
-                        Box::new(e),
-                    ))?,
+                posted_at: posted_at_str.parse().map_err(|e| rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(e)))?,
+                fetched_at: fetched_at_str.parse().map_err(|e| rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(e)))?,
                 location: row.get(7)?,
                 description: row.get(8)?,
             })
         })?;
-    
+
         let mut offers = Vec::new();
         for offer in rows {
             offers.push(offer?);
         }
-    
+
         Ok(offers)
     }
-    
 
     pub fn get_average_prices(&self) -> Result<Vec<(String, f64)>, StorageError> {
         let mut stmt = self.conn.prepare(

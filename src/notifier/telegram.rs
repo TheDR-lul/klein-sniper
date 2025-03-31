@@ -103,16 +103,18 @@ impl TelegramNotifier {
             .await
             .map_err(|e| NotifyError::ApiError(format!("Ошибка запроса: {}", e)))?;
     
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_else(|_| "unknown".into());
+        let status = response.status();
+        let body = response.text().await.unwrap_or_else(|_| "unknown".into());
+    
+        if !status.is_success() {
             tracing::warn!("❌ Telegram error [{}]: {}", status, body);
             return Err(NotifyError::Unreachable);
         }
     
-        Ok(())
-    }
+        tracing::info!("✅ Telegram success [{}]: {}", status, body); // 🔍 лог даже при успехе
     
+        Ok(())
+    }    
 
     pub async fn listen_for_commands(&mut self) {
         let url = format!("https://api.telegram.org/bot{}/getUpdates", self.bot_token);
@@ -131,6 +133,7 @@ impl TelegramNotifier {
                                 "/refresh" => {
                                     self.refresh_notify.notify_one();
                                     let _ = self.notify_text("🔄 Принудительный перезапуск запущен.").await;
+
                                 },
                                 "/uptime" => {
                                     let uptime = self.start_time.elapsed();
