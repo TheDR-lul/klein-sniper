@@ -67,7 +67,7 @@ async fn main() {
     if let Err(e) = notifier.lock().await.notify_text("🚀 KleinSniper запущен!").await {
         warn!("Startup notification failed: {e:?}");
     }
-
+    
     loop {
         info!("🔁 Entering main loop...");
         info!("📦 Models to process: {}", config.models.len());

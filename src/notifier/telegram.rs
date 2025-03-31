@@ -9,6 +9,7 @@ use tokio::sync::{Mutex, Notify};
 use tokio::time::sleep;
 use tracing::{info, warn};
 use std::collections::HashMap;
+use tokio::time::timeout;
 
 #[derive(Debug, Deserialize)]
 struct TelegramApiResponse {
@@ -100,17 +101,18 @@ impl TelegramNotifier {
     
         tracing::info!("📤 Sending Telegram message:\n{}", message);
     
-        let response = match self
-            .client
-            .post(&url)
-            .form(&params)
-            .send()
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
+        let response = match timeout(
+            Duration::from_secs(10),
+            self.client.post(&url).form(&params).send()
+        ).await {
+            Ok(Ok(resp)) => resp,
+            Ok(Err(e)) => {
                 tracing::error!("❌ Telegram send() failed: {:?}", e);
                 return Err(NotifyError::ApiError(format!("Send failed: {}", e)));
+            }
+            Err(_) => {
+                tracing::error!("⏳ Telegram send() timed out");
+                return Err(NotifyError::Unreachable);
             }
         };
     
@@ -125,7 +127,7 @@ impl TelegramNotifier {
         tracing::info!("✅ Telegram response [{}]: {}", status, body);
         Ok(())
     }    
-
+ 
     pub async fn listen_for_commands(&mut self) {
         let url = format!("https://api.telegram.org/bot{}/getUpdates", self.bot_token);
         loop {
@@ -222,6 +224,16 @@ impl TelegramNotifier {
                                         let _ = self.notify_text(&msg).await;
                                     }
                                 },
+                                "/force_notify" => {
+                                    match self.storage.lock().await.get_last_offer() {
+                                        Ok(Some(offer)) => {
+                                            let _ = self.notify(&offer).await;
+                                        }
+                                        _ => {
+                                            let _ = self.notify_text("❌ Нет последнего оффера для уведомления.").await;
+                                        }
+                                    }
+                                }
                                 _ => {
                                     let _ = self.notify_text("🤖 Неизвестная команда. Введите /help для списка.").await;
                                 }
@@ -262,10 +274,12 @@ pub async fn check_and_notify_cheapest_for_model(
     notifier: Arc<Mutex<TelegramNotifier>>,
     best_deal_ids: Arc<Mutex<HashMap<String, String>>>,
 ) {
+    tracing::info!("🔍 [cheapest] Старт проверки модели '{}'", model_name);
+
     let offers = match storage.lock().await.get_all_offers() {
         Ok(o) => o,
         Err(e) => {
-            tracing::warn!("❌ Failed to get all offers for '{}': {:?}", model_name, e);
+            tracing::warn!("❌ [cheapest] Не удалось получить офферы для '{}': {:?}", model_name, e);
             return;
         }
     };
@@ -275,8 +289,10 @@ pub async fn check_and_notify_cheapest_for_model(
         .filter(|o| o.model == model_name && o.price.is_finite())
         .collect();
 
+    tracing::info!("📦 [cheapest] Найдено {} офферов для модели '{}'", model_offers.len(), model_name);
+
     if model_offers.is_empty() {
-        tracing::info!("ℹ️ No offers found for model '{}'", model_name);
+        tracing::info!("ℹ️ [cheapest] Нет офферов для '{}'", model_name);
         return;
     }
 
@@ -285,44 +301,55 @@ pub async fn check_and_notify_cheapest_for_model(
         .min_by(|a, b| a.price.partial_cmp(&b.price).unwrap());
 
     if let Some(cheapest) = cheapest {
+        tracing::info!(
+            "💰 [cheapest] Самое дешёвое: {:.2} € | {} | id={}",
+            cheapest.price,
+            cheapest.link,
+            cheapest.id
+        );
+
         let mut map = best_deal_ids.lock().await;
 
         match map.get(model_name) {
-            Some(prev_id) if prev_id == &cheapest.id => {
-                tracing::info!(
-                    "✅ Cheapest unchanged for '{}': {} € (id={})",
-                    model_name,
-                    cheapest.price,
-                    cheapest.id
-                );
-                return;
-            }
-            _ => {
-                tracing::info!(
-                    "💸 New cheapest for '{}': {} € | {} (id={})",
-                    model_name,
-                    cheapest.price,
-                    cheapest.link,
-                    cheapest.id
-                );
+            Some(prev_id) => {
+                tracing::info!("📌 [cheapest] Предыдущий id для '{}': {}", model_name, prev_id);
 
-                tracing::info!(
-                    "📤 Calling notify(...) for '{}': id={}, price={}, link={}",
-                    model_name,
-                    cheapest.id,
-                    cheapest.price,
-                    cheapest.link
-                );
-
-                if let Err(e) = notifier.lock().await.notify(cheapest).await {
-                    tracing::warn!("❌ Telegram send error (cheapest): {e:?}");
+                if prev_id == &cheapest.id {
+                    tracing::info!(
+                        "✅ [cheapest] Предложение уже уведомлено: {} € (id={})",
+                        cheapest.price,
+                        cheapest.id
+                    );
+                    return;
                 } else {
-                    tracing::info!("✅ Telegram notification sent and deal tracked.");
-                    map.insert(model_name.to_string(), cheapest.id.clone());
+                    tracing::info!(
+                        "🔁 [cheapest] Обновление! Старое id: {}, новое id: {}",
+                        prev_id,
+                        cheapest.id
+                    );
                 }
+            }
+            None => {
+                tracing::info!("🆕 [cheapest] Модель '{}' ещё не была уведомлена.", model_name);
+            }
+        }
+
+        tracing::info!(
+            "📤 [cheapest] Вызываем notify() для id={}, цена={:.2} €",
+            cheapest.id,
+            cheapest.price
+        );
+
+        match notifier.lock().await.notify(cheapest).await {
+            Ok(_) => {
+                tracing::info!("✅ [cheapest] Уведомление отправлено, сохраняем id.");
+                map.insert(model_name.to_string(), cheapest.id.clone());
+            }
+            Err(e) => {
+                tracing::warn!("❌ [cheapest] Ошибка при отправке уведомления: {:?}", e);
             }
         }
     } else {
-        tracing::warn!("⚠️ Failed to find cheapest offer for '{}'", model_name);
+        tracing::warn!("⚠️ [cheapest] Не удалось найти минимальное предложение для '{}'", model_name);
     }
 }
