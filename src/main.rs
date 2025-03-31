@@ -1,4 +1,4 @@
-//! main.rs
+// src/main.rs
 
 mod config;
 mod model;
@@ -9,16 +9,17 @@ mod normalizer;
 mod notifier;
 mod storage;
 
-use crate::analyzer::price_analysis::Analyzer;
 use analyzer::AnalyzerImpl;
+use notifier::telegram::check_and_notify_cheapest_for_model;
+use crate::analyzer::price_analysis::Analyzer;
 use config::load_config;
 use model::ScrapeRequest;
-use normalizer::normalize_all;
-use notifier::telegram::{check_and_notify_cheapest_for_model, spawn_listener};
-use notifier::TelegramNotifier;
-use parser::KleinanzeigenParser;
 use scraper::{Scraper, ScraperImpl};
+use parser::KleinanzeigenParser;
+use normalizer::normalize_all;
+use notifier::TelegramNotifier;
 use storage::SqliteStorage;
+use notifier::telegram::spawn_listener;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -49,7 +50,6 @@ async fn main() {
     let scraper = ScraperImpl::new();
     let parser = KleinanzeigenParser::new();
     let analyzer = AnalyzerImpl::new();
-    let refresh_notify = Arc::new(Notify::new());
 
     let storage = match SqliteStorage::new("data.db") {
         Ok(s) => Arc::new(Mutex::new(s)),
@@ -59,6 +59,7 @@ async fn main() {
         }
     };
 
+    let refresh_notify = Arc::new(Notify::new());
     let notifier = Arc::new(Mutex::new(TelegramNotifier::new(
         config.telegram_bot_token.clone(),
         config.telegram_chat_id,
@@ -66,12 +67,10 @@ async fn main() {
         config.clone(),
         refresh_notify.clone(),
     )));
-
     let best_deal_ids = Arc::new(Mutex::new(HashMap::<String, String>::new()));
 
     spawn_listener(notifier.clone());
 
-    // 🚀 Startup
     info!("📨 Sending startup message...");
     if let Err(e) = notifier.lock().await.notify_text("🚀 KleinSniper запущен!").await {
         warn!("Startup notification failed: {e:?}");
@@ -79,21 +78,106 @@ async fn main() {
 
     loop {
         info!("🔁 Entering main loop...");
-        process_all_models(
-            &config,
-            &scraper,
-            &parser,
-            &analyzer,
-            &storage,
-            &notifier,
-            &best_deal_ids,
-        )
-        .await;
+        info!("📦 Models to process: {}", config.models.len());
 
-        info!(
-            "⏳ Waiting for timer ({}s) or /refresh...",
-            config.check_interval_seconds
-        );
+        for model_cfg in &config.models {
+            info!("🔄 Processing: {}", model_cfg.query);
+            let request = ScrapeRequest {
+                query: model_cfg.query.clone(),
+                category_id: model_cfg.category_id.clone(),
+            };
+
+            if let Ok(Some(prev_stats)) = storage.lock().await.get_stats(&model_cfg.query) {
+                info!("ℹ️ Previous stats: {:.2} € | Updated: {}", prev_stats.avg_price, prev_stats.last_updated);
+            }
+
+            info!("🌐 Fetching offers...");
+            let html = match scraper.fetch(&request).await {
+                Ok(html) => html,
+                Err(model::ScraperError::InvalidResponse(html)) => {
+                    log_and_save_html(&html, &model_cfg.query);
+                    continue;
+                }
+                Err(e) => {
+                    warn!("❌ Scraper error: {e:?}");
+                    continue;
+                }
+            };
+
+            info!("🧩 Parsing HTML...");
+            let mut offers = match parser.parse_filtered(&html, model_cfg) {
+                Ok(o) => o,
+                Err(e) => {
+                    log_and_save_html(&html, &model_cfg.query);
+                    warn!("❌ Parse error: {e:?}");
+                    continue;
+                }
+            };
+
+            normalize_all(&mut offers, &config.models);
+
+            let mut seen_ids = HashSet::new();
+            for offer in &offers {
+                seen_ids.insert(offer.id.clone());
+                if let Err(e) = storage.lock().await.save_offer(offer) {
+                    warn!("DB save error: {e:?}");
+                }
+            }
+
+            let seen_vec: Vec<String> = seen_ids.into_iter().collect();
+            info!("🧹 Cleaning up old offers...");
+            if let Err(e) = storage.lock().await.delete_missing_offers(&seen_vec) {
+                warn!("Delete missing error: {e:?}");
+            }
+
+            let stats = analyzer.calculate_stats(&offers);
+            info!("📈 Stats: avg = {:.2}, std_dev = {:.2}", stats.avg_price, stats.std_dev);
+
+            info!("📥 Updating stats...");
+            if let Err(e) = storage.lock().await.update_stats(&stats) {
+                warn!("Stats update failed: {e:?}");
+            }
+
+            info!("🧪 Notifying cheapest...");
+            check_and_notify_cheapest_for_model(
+                &model_cfg.query,
+                storage.clone(),
+                notifier.clone(),
+                best_deal_ids.clone(),
+            ).await;
+
+            let good_offers = analyzer.find_deals(&offers, &stats, model_cfg);
+            info!("✅ Good offers: {}", good_offers.len());
+
+            for offer in good_offers {
+                info!("💡 Checking offer: {} — {:.2} €", offer.id, offer.price);
+
+                match storage.lock().await.is_notified(&offer.id) {
+                    Ok(true) => {
+                        info!("🔕 Already notified: {}", offer.id);
+                        continue;
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        warn!("❌ Notify check failed: {e:?}");
+                        continue;
+                    }
+                }
+
+                info!("📤 Sending Telegram notification...");
+                if let Err(e) = notifier.lock().await.notify(&offer).await {
+                    warn!("Telegram send error: {e:?}");
+                } else if let Err(e) = storage.lock().await.mark_notified(&offer.id) {
+                    warn!("Mark notified failed: {e:?}");
+                } else {
+                    info!("✅ Offer notified and marked.");
+                }
+            }
+
+            info!("✔️ Finished model: {}", model_cfg.query);
+        }
+
+        info!("⏳ Waiting for timer ({}s) or /refresh...", config.check_interval_seconds);
 
         tokio::select! {
             _ = sleep(Duration::from_secs(config.check_interval_seconds)) => {
@@ -105,121 +189,6 @@ async fn main() {
         }
 
         info!("🔁 Restarting main loop...");
-    }
-}
-
-async fn process_all_models(
-    config: &Arc<config::AppConfig>,
-    scraper: &ScraperImpl,
-    parser: &KleinanzeigenParser,
-    analyzer: &AnalyzerImpl,
-    storage: &Arc<Mutex<SqliteStorage>>,
-    notifier: &Arc<Mutex<TelegramNotifier>>,
-    best_deal_ids: &Arc<Mutex<HashMap<String, String>>>,
-) {
-    info!("📦 Models to process: {}", config.models.len());
-
-    for model_cfg in &config.models {
-        info!("🔄 Processing: {}", model_cfg.query);
-
-        let request = ScrapeRequest {
-            query: model_cfg.query.clone(),
-            category_id: model_cfg.category_id.clone(),
-        };
-
-        if let Ok(Some(prev_stats)) = storage.lock().await.get_stats(&model_cfg.query) {
-            info!(
-                "ℹ️ Previous stats: {:.2} € | Updated: {}",
-                prev_stats.avg_price, prev_stats.last_updated
-            );
-        }
-
-        let html = match scraper.fetch(&request).await {
-            Ok(html) => html,
-            Err(model::ScraperError::InvalidResponse(html)) => {
-                log_and_save_html(&html, &model_cfg.query);
-                continue;
-            }
-            Err(e) => {
-                warn!("❌ Scraper error: {e:?}");
-                continue;
-            }
-        };
-
-        let mut offers = match parser.parse_filtered(&html, model_cfg) {
-            Ok(o) => o,
-            Err(e) => {
-                log_and_save_html(&html, &model_cfg.query);
-                warn!("❌ Parse error: {e:?}");
-                continue;
-            }
-        };
-
-        normalize_all(&mut offers, &config.models);
-
-        let mut seen_ids = HashSet::new();
-        for offer in &offers {
-            seen_ids.insert(offer.id.clone());
-            if let Err(e) = storage.lock().await.save_offer(offer) {
-                warn!("DB save error: {e:?}");
-            }
-        }
-
-        if let Err(e) = storage
-            .lock()
-            .await
-            .delete_missing_offers(&seen_ids.into_iter().collect::<Vec<_>>())
-        {
-            warn!("Delete missing error: {e:?}");
-        }
-
-        let stats = analyzer.calculate_stats(&offers);
-        info!(
-            "📈 Stats: avg = {:.2}, std_dev = {:.2}",
-            stats.avg_price, stats.std_dev
-        );
-
-        if let Err(e) = storage.lock().await.update_stats(&stats) {
-            warn!("Stats update failed: {e:?}");
-        }
-
-        info!("🧪 Notifying cheapest...");
-        check_and_notify_cheapest_for_model(
-            &model_cfg.query,
-            storage.clone(),
-            notifier.clone(),
-            best_deal_ids.clone(),
-        )
-        .await;
-
-        let good_offers = analyzer.find_deals(&offers, &stats, model_cfg);
-        info!("✅ Good offers: {}", good_offers.len());
-
-        for offer in good_offers {
-            info!("💡 Checking offer: {} — {:.2} €", offer.id, offer.price);
-
-            match storage.lock().await.is_notified(&offer.id) {
-                Ok(true) => {
-                    info!("🔕 Already notified: {}", offer.id);
-                    continue;
-                }
-                Ok(false) => {}
-                Err(e) => {
-                    warn!("❌ Notify check failed: {e:?}");
-                    continue;
-                }
-            }
-
-            if let Err(e) = notifier.lock().await.notify(&offer).await {
-                warn!("Telegram send error: {e:?}");
-            } else if let Err(e) = storage.lock().await.mark_notified(&offer.id) {
-                warn!("Mark notified failed: {e:?}");
-            } else {
-                info!("✅ Offer notified and marked.");
-            }
-        }
-
-        info!("✔️ Finished model: {}", model_cfg.query);
     }
 }
 

@@ -10,6 +10,15 @@
       "min_price": 150,
       "max_price": 800,
       "match_keywords": ["z1 extreme", "extreme", "RC71L"]
+    },
+    {
+      "query": "MSI Claw",
+      "category_id": "k0",
+      "deviation_threshold": 0.2,
+      "min_price_delta": 100,
+      "min_price": 150,
+      "max_price": 800,
+      "match_keywords": ["Claw", "8", "Ai"]
     }
   ],
   "check_interval_seconds": 60
