@@ -70,13 +70,18 @@ impl TelegramNotifier {
 
     pub async fn notify_text(&self, text: &str) -> Result<(), Error> {
         let url = format!("https://api.telegram.org/bot{}/sendMessage", self.bot_token);
-
-        let params = [
-            ("chat_id", self.chat_id.to_string()),
-            ("text", text.to_string()),
-        ];
-
-        self.client.post(&url).form(&params).send().await?;
+        let params = [("chat_id", self.chat_id.to_string()), ("text", text.to_string())];
+    
+        let response = self.client.post(&url).form(&params).send().await?;
+        let status = response.status();
+        let body = response.text().await.unwrap_or_else(|_| "unknown".into());
+    
+        if !status.is_success() {
+            warn!("❌ Telegram text error [{}]: {}", status, body);
+        } else {
+            info!("✅ Telegram text sent [{}]: {}", status, body);
+        }
+    
         Ok(())
     }
 
@@ -93,26 +98,31 @@ impl TelegramNotifier {
             ("text", message.clone()),
         ];
     
-        tracing::info!("📤 Sending Telegram notification: {}", message);
+        tracing::info!("📤 Sending Telegram message:\n{}", message);
     
-        let response = self
+        let response = match self
             .client
             .post(&url)
             .form(&params)
             .send()
             .await
-            .map_err(|e| NotifyError::ApiError(format!("Ошибка запроса: {}", e)))?;
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("❌ Telegram send() failed: {:?}", e);
+                return Err(NotifyError::ApiError(format!("Send failed: {}", e)));
+            }
+        };
     
         let status = response.status();
         let body = response.text().await.unwrap_or_else(|_| "unknown".into());
     
         if !status.is_success() {
-            tracing::warn!("❌ Telegram error [{}]: {}", status, body);
+            tracing::warn!("❌ Telegram API responded [{}]: {}", status, body);
             return Err(NotifyError::Unreachable);
         }
     
-        tracing::info!("✅ Telegram success [{}]: {}", status, body); // 🔍 лог даже при успехе
-    
+        tracing::info!("✅ Telegram response [{}]: {}", status, body);
         Ok(())
     }    
 
@@ -279,15 +289,35 @@ pub async fn check_and_notify_cheapest_for_model(
 
         match map.get(model_name) {
             Some(prev_id) if prev_id == &cheapest.id => {
-                tracing::info!("✅ Cheapest unchanged for '{}': {} €", model_name, cheapest.price);
+                tracing::info!(
+                    "✅ Cheapest unchanged for '{}': {} € (id={})",
+                    model_name,
+                    cheapest.price,
+                    cheapest.id
+                );
                 return;
             }
             _ => {
-                tracing::info!("💸 New cheapest for '{}': {} € | {}", model_name, cheapest.price, cheapest.link);
+                tracing::info!(
+                    "💸 New cheapest for '{}': {} € | {} (id={})",
+                    model_name,
+                    cheapest.price,
+                    cheapest.link,
+                    cheapest.id
+                );
+
+                tracing::info!(
+                    "📤 Calling notify(...) for '{}': id={}, price={}, link={}",
+                    model_name,
+                    cheapest.id,
+                    cheapest.price,
+                    cheapest.link
+                );
 
                 if let Err(e) = notifier.lock().await.notify(cheapest).await {
-                    tracing::warn!("Telegram send error (cheapest): {e:?}");
+                    tracing::warn!("❌ Telegram send error (cheapest): {e:?}");
                 } else {
+                    tracing::info!("✅ Telegram notification sent and deal tracked.");
                     map.insert(model_name.to_string(), cheapest.id.clone());
                 }
             }

@@ -56,7 +56,6 @@ async fn main() {
     )));
     let best_deal_ids = Arc::new(Mutex::new(HashMap::<String, String>::new()));
 
-    // Telegram listener
     let notifier_clone = notifier.clone();
     tokio::spawn(async move {
         info!("▶️ Starting Telegram listener...");
@@ -64,7 +63,6 @@ async fn main() {
         info!("🛑 Telegram listener ended.");
     });
 
-    // Startup notification
     info!("📨 Sending startup message...");
     if let Err(e) = notifier.lock().await.notify_text("🚀 KleinSniper запущен!").await {
         warn!("Startup notification failed: {e:?}");
@@ -114,7 +112,7 @@ async fn main() {
             for offer in &offers {
                 seen_ids.insert(offer.id.clone());
 
-                info!("💾 Saving offer: {}", offer.id);
+                //info!("💾 Saving offer: {} | {:.2} € | {}", offer.id, offer.price, offer.link);
                 if let Err(e) = storage.lock().await.save_offer(offer) {
                     warn!("DB save error: {e:?}");
                 }
@@ -161,7 +159,7 @@ async fn main() {
                     }
                 }
 
-                info!("📤 Sending notification...");
+                info!("📤 Sending notification to Telegram for offer: {}", offer.id);
                 if let Err(e) = notifier.lock().await.notify(&offer).await {
                     warn!("Telegram send error: {e:?}");
                 } else {
