@@ -10,22 +10,18 @@ mod notifier;
 mod storage;
 
 use analyzer::AnalyzerImpl;
-use notifier::telegram::check_and_notify_cheapest_for_model;
+use notifier::telegram::{check_and_notify_cheapest_for_model, spawn_listener, TelegramNotifier};
 use crate::analyzer::price_analysis::Analyzer;
 use config::load_config;
 use model::ScrapeRequest;
 use scraper::{Scraper, ScraperImpl};
 use parser::KleinanzeigenParser;
 use normalizer::normalize_all;
-use notifier::TelegramNotifier;
 use storage::SqliteStorage;
-use notifier::telegram::spawn_listener;
-
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-
 use tokio::sync::{Mutex, Notify};
 use tokio::time::{sleep, Duration};
 use tracing::{error, info, warn};
@@ -60,19 +56,21 @@ async fn main() {
     };
 
     let refresh_notify = Arc::new(Notify::new());
-    let notifier = Arc::new(Mutex::new(TelegramNotifier::new(
+    // Создаем нотификатор без оборачивания в Mutex
+    let notifier = Arc::new(TelegramNotifier::new(
         config.telegram_bot_token.clone(),
         config.telegram_chat_id,
         storage.clone(),
         config.clone(),
         refresh_notify.clone(),
-    )));
+    ));
     let best_deal_ids = Arc::new(Mutex::new(HashMap::<String, String>::new()));
 
+    // Запускаем прослушиватель команд в отдельной задаче
     spawn_listener(notifier.clone());
 
     info!("📨 Sending startup message...");
-    if let Err(e) = notifier.lock().await.notify_text("🚀 KleinSniper запущен!").await {
+    if let Err(e) = notifier.notify_text("🚀 KleinSniper запущен!").await {
         warn!("Startup notification failed: {e:?}");
     }
 
@@ -165,7 +163,7 @@ async fn main() {
                 }
 
                 info!("📤 Sending Telegram notification...");
-                if let Err(e) = notifier.lock().await.notify(&offer).await {
+                if let Err(e) = notifier.notify(&offer).await {
                     warn!("Telegram send error: {e:?}");
                 } else if let Err(e) = storage.lock().await.mark_notified(&offer.id) {
                     warn!("Mark notified failed: {e:?}");
