@@ -83,6 +83,8 @@ impl SqliteStorage {
         Ok(())
     }
 
+    /// Удаляет объявления, ID которых отсутствуют в списке current_ids.
+    /// Этот метод работает для всех моделей.
     pub fn delete_missing_offers(&self, current_ids: &[String]) -> Result<(), StorageError> {
         if current_ids.is_empty() {
             self.conn.execute("DELETE FROM offers", [])?;
@@ -93,6 +95,26 @@ impl SqliteStorage {
         let sql = format!("DELETE FROM offers WHERE id NOT IN ({})", placeholders);
         let mut stmt = self.conn.prepare(&sql)?;
         stmt.execute(rusqlite::params_from_iter(current_ids))?;
+        Ok(())
+    }
+
+    /// Новый метод: удаляет неактуальные объявления только для указанной модели.
+    pub fn delete_missing_offers_for_model(&self, model: &str, current_ids: &[String]) -> Result<(), StorageError> {
+        if current_ids.is_empty() {
+            self.conn.execute("DELETE FROM offers WHERE model = ?1", params![model])?;
+            return Ok(());
+        }
+
+        let placeholders = current_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "DELETE FROM offers WHERE model = ?1 AND id NOT IN ({})",
+            placeholders
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        // Первый параметр - модель, далее идут актуальные ID для этой модели.
+        let mut params_vec = vec![model.to_string()];
+        params_vec.extend(current_ids.iter().cloned());
+        stmt.execute(rusqlite::params_from_iter(params_vec))?;
         Ok(())
     }
 
