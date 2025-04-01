@@ -19,16 +19,7 @@
       "min_price": 150,
       "max_price": 400,
       "match_keywords": ["Claw", "8", "Ai"]
-    },
-    {
-    "query": "RTX 3090",
-    "category_id": "k0c161",
-    "deviation_threshold": 0.3,
-    "min_price_delta": 100,
-    "min_price": 150,
-    "max_price": 800,
-    "match_keywords": ["RTX 3090", "RTX", "3090", "GeForce"]
-  }
+    }
 ],
   "check_interval_seconds": 200
 }

@@ -123,8 +123,9 @@ async fn main() {
             }
 
             let seen_vec: Vec<String> = seen_ids.into_iter().collect();
-            info!("🧹 Cleaning up old offers...");
-            if let Err(e) = storage.lock().await.delete_missing_offers(&seen_vec) {
+            info!("🧹 Cleaning up old offers for model {}...", model_cfg.query);
+            // Вызываем метод с фильтрацией по модели, чтобы удалялись только устаревшие объявления для данной модели
+            if let Err(e) = storage.lock().await.delete_missing_offers_for_model(&model_cfg.query, &seen_vec) {
                 warn!("Delete missing error: {e:?}");
             }
 

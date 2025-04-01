@@ -12,7 +12,7 @@ use tracing::{info, warn};
 use tokio::sync::Notify;
 use std::sync::atomic::{AtomicI64, Ordering};
 use tokio::sync::Mutex;
-use std::collections::HashMap; // добавлен импорт для HashMap
+use std::collections::HashMap; // added import for HashMap
 
 #[derive(Debug, Deserialize)]
 struct TelegramApiResponse {
@@ -41,7 +41,7 @@ pub struct TelegramNotifier {
     bot_token: String,
     chat_id: i64,
     client: Client,
-    offset: Arc<AtomicI64>, // изменён тип на Arc<AtomicI64>
+    offset: Arc<AtomicI64>, // changed type to Arc<AtomicI64>
     storage: Arc<Mutex<SqliteStorage>>,
     config: Arc<AppConfig>,
     start_time: Instant,
@@ -59,13 +59,13 @@ impl TelegramNotifier {
         let client = Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
-            .expect("❗ Не удалось создать HTTP клиент");
+            .expect("❗ Failed to create HTTP client");
 
         Self {
             bot_token,
             chat_id,
             client,
-            offset: Arc::new(AtomicI64::new(0)), // создаём атомарное значение через Arc
+            offset: Arc::new(AtomicI64::new(0)), // create atomic value via Arc
             storage,
             config,
             start_time: Instant::now(),
@@ -97,7 +97,7 @@ impl TelegramNotifier {
         let url = format!("https://api.telegram.org/bot{}/sendMessage", self.bot_token);
 
         let message = format!(
-            "💸 Найдено выгодное предложение!\n\n📦 Модель: {}\n💰 Цена: {:.2} €\n🔗 Ссылка: {}",
+            "💸 Found a great deal!\n\n📦 Model: {}\n💰 Price: {:.2} €\n🔗 Link: {}",
             offer.model, offer.price, offer.link
         );
 
@@ -154,38 +154,38 @@ impl TelegramNotifier {
                         if let Some(text) = update.message.text.as_deref() {
                             match text {
                                 "/ping" => {
-                                    if let Err(e) = self.notify_text("✅ Я на связи!").await {
+                                    if let Err(e) = self.notify_text("✅ I am online!").await {
                                         warn!("❌ /ping error: {e:?}");
                                     }
                                 }
                                 "/status" => {
                                     if let Err(e) = self
-                                        .notify_text("📊 Анализатор работает. Ждём следующую проверку.")
+                                        .notify_text("📊 Analyzer is running. Waiting for the next check.")
                                         .await
                                     {
                                         warn!("❌ /status error: {e:?}");
                                     }
                                 }
                                 "/help" => {
-                                    let help_msg = "📋 Доступные команды:\n\
-                                        /ping — проверить подключение\n\
-                                        /status — статус анализатора\n\
-                                        /help — список команд\n\
-                                        /last — последнее выгодное предложение\n\
-                                        /top5 — топ 5 предложений\n\
-                                        /avg — средняя цена\n\
-                                        /config — текущая конфигурация\n\
-                                        /refresh — ручной перезапуск\n\
-                                        /uptime — аптайм сервиса";
+                                    let help_msg = "📋 Available commands:\n\
+                                        /ping — check connection\n\
+                                        /status — analyzer status\n\
+                                        /help — command list\n\
+                                        /last — last great deal\n\
+                                        /top5 — top 5 offers\n\
+                                        /avg — average price\n\
+                                        /config — current configuration\n\
+                                        /refresh — manual restart\n\
+                                        /uptime — service uptime";
                                     if let Err(e) = self.notify_text(help_msg).await {
                                         warn!("❌ /help error: {e:?}");
                                     }
                                 }
                                 "/refresh" => {
-                                    info!("📣 /refresh command received, notifying...");
+                                    info!("📣 /refresh command received, triggering refresh...");
                                     self.refresh_notify.notify_one();
                                     if let Err(e) = self
-                                        .notify_text("🔄 Принудительный перезапуск запущен.")
+                                        .notify_text("🔄 Forced restart initiated.")
                                         .await
                                     {
                                         warn!("❌ /refresh error: {e:?}");
@@ -194,7 +194,7 @@ impl TelegramNotifier {
                                 "/uptime" => {
                                     let uptime = self.start_time.elapsed();
                                     let msg = format!(
-                                        "⏱ Аптайм: {:02}:{:02}:{:02}",
+                                        "⏱ Uptime: {:02}:{:02}:{:02}",
                                         uptime.as_secs() / 3600,
                                         (uptime.as_secs() % 3600) / 60,
                                         uptime.as_secs() % 60
@@ -207,7 +207,7 @@ impl TelegramNotifier {
                                     match self.storage.lock().await.get_last_offer() {
                                         Ok(Some(offer)) => {
                                             let msg = format!(
-                                                "🕵️ Последнее предложение:\n📦 {}\n💰 {:.2} €\n📍 {}\n🔗 {}",
+                                                "🕵️ Last offer:\n📦 {}\n💰 {:.2} €\n📍 {}\n🔗 {}",
                                                 offer.title, offer.price, offer.location, offer.link
                                             );
                                             if let Err(e) = self.notify_text(&msg).await {
@@ -216,14 +216,14 @@ impl TelegramNotifier {
                                         }
                                         Ok(None) => {
                                             if let Err(e) =
-                                                self.notify_text("📭 Нет предложений в базе.").await
+                                                self.notify_text("📭 No offers in the database.").await
                                             {
                                                 warn!("❌ /last empty notify error: {e:?}");
                                             }
                                         }
                                         Err(e) => {
                                             if let Err(send_err) = self
-                                                .notify_text(&format!("❌ Ошибка: {:?}", e))
+                                                .notify_text(&format!("❌ Error: {:?}", e))
                                                 .await
                                             {
                                                 warn!("❌ /last send error: {send_err:?}");
@@ -235,7 +235,7 @@ impl TelegramNotifier {
                                     match self.storage.lock().await.get_top5_offers() {
                                         Ok(offers) if !offers.is_empty() => {
                                             let mut msg =
-                                                String::from("🏆 Топ-5 выгодных предложений:\n");
+                                                String::from("🏆 Top-5 best offers:\n");
                                             for (i, offer) in offers.iter().enumerate() {
                                                 msg.push_str(&format!(
                                                     "{}. {} — {:.2} €\n📍 {}\n🔗 {}\n\n",
@@ -252,14 +252,14 @@ impl TelegramNotifier {
                                         }
                                         Ok(_) => {
                                             if let Err(e) =
-                                                self.notify_text("📭 Нет предложений в базе.").await
+                                                self.notify_text("📭 No offers in the database.").await
                                             {
                                                 warn!("❌ /top5 empty notify error: {e:?}");
                                             }
                                         }
                                         Err(e) => {
                                             if let Err(send_err) = self
-                                                .notify_text(&format!("❌ Ошибка: {:?}", e))
+                                                .notify_text(&format!("❌ Error: {:?}", e))
                                                 .await
                                             {
                                                 warn!("❌ /top5 send error: {send_err:?}");
@@ -271,7 +271,7 @@ impl TelegramNotifier {
                                     match self.storage.lock().await.get_average_prices() {
                                         Ok(prices) if !prices.is_empty() => {
                                             let mut msg =
-                                                String::from("📊 Средние цены по моделям:\n");
+                                                String::from("📊 Average prices by model:\n");
                                             for (model, price) in prices {
                                                 msg.push_str(&format!("🔹 {} — {:.2} €\n", model, price));
                                             }
@@ -281,15 +281,14 @@ impl TelegramNotifier {
                                         }
                                         Ok(_) => {
                                             if let Err(e) =
-                                                self.notify_text("📭 Нет статистики по моделям.")
-                                                    .await
+                                                self.notify_text("📭 No model statistics available.").await
                                             {
                                                 warn!("❌ /avg empty notify error: {e:?}");
                                             }
                                         }
                                         Err(e) => {
                                             if let Err(send_err) = self
-                                                .notify_text(&format!("❌ Ошибка: {:?}", e))
+                                                .notify_text(&format!("❌ Error: {:?}", e))
                                                 .await
                                             {
                                                 warn!("❌ /avg send error: {send_err:?}");
@@ -300,13 +299,13 @@ impl TelegramNotifier {
                                 "/config" => {
                                     if self.config.models.is_empty() {
                                         if let Err(e) = self
-                                            .notify_text("⚠️ Нет загруженных моделей в конфигурации.")
+                                            .notify_text("⚠️ No models loaded in the configuration.")
                                             .await
                                         {
                                             warn!("❌ /config empty error: {e:?}");
                                         }
                                     } else {
-                                        let mut msg = String::from("⚙️ Загруженные модели:\n");
+                                        let mut msg = String::from("⚙️ Loaded models:\n");
                                         for model in &self.config.models {
                                             msg.push_str(&format!("🔸 {} [{}]\n", model.query, model.category_id));
                                         }
@@ -324,7 +323,7 @@ impl TelegramNotifier {
                                                 }
                                                 Err(e) => {
                                                     if let Err(se) = self
-                                                        .notify_text(&format!("❌ Ошибка при отправке: {:?}", e))
+                                                        .notify_text(&format!("❌ Error sending: {:?}", e))
                                                         .await
                                                     {
                                                         warn!("❌ /force_notify send error: {se:?}");
@@ -334,7 +333,7 @@ impl TelegramNotifier {
                                         }
                                         _ => {
                                             if let Err(e) = self
-                                                .notify_text("❌ Нет последнего оффера для уведомления.")
+                                                .notify_text("❌ No last offer available for notification.")
                                                 .await
                                             {
                                                 warn!("❌ /force_notify notify error: {e:?}");
@@ -344,7 +343,7 @@ impl TelegramNotifier {
                                 }
                                 _ => {
                                     if let Err(e) = self
-                                        .notify_text("🤖 Неизвестная команда. Введите /help для списка.")
+                                        .notify_text("🤖 Unknown command. Type /help for a list of commands.")
                                         .await
                                     {
                                         warn!("❌ unknown command notify error: {e:?}");
@@ -364,15 +363,15 @@ impl TelegramNotifier {
         let url = format!("https://api.telegram.org/bot{}/setMyCommands", self.bot_token);
         let commands = serde_json::json!({
             "commands": [
-                { "command": "ping", "description": "Проверить подключение" },
-                { "command": "status", "description": "Показать статус анализатора" },
-                { "command": "help", "description": "Список доступных команд" },
-                { "command": "last", "description": "Показать последнее выгодное предложение" },
-                { "command": "top5", "description": "Топ 5 предложений по выгоде" },
-                { "command": "avg", "description": "Средняя цена по модели" },
-                { "command": "config", "description": "Текущая конфигурация" },
-                { "command": "refresh", "description": "Ручной запуск анализа" },
-                { "command": "uptime", "description": "Аптайм сканера" }
+                { "command": "ping", "description": "Check connection" },
+                { "command": "status", "description": "Show analyzer status" },
+                { "command": "help", "description": "List available commands" },
+                { "command": "last", "description": "Show last great offer" },
+                { "command": "top5", "description": "Top 5 best offers" },
+                { "command": "avg", "description": "Average price by model" },
+                { "command": "config", "description": "Current configuration" },
+                { "command": "refresh", "description": "Manual analysis restart" },
+                { "command": "uptime", "description": "Scanner uptime" }
             ]
         });
         self.client.post(&url).json(&commands).send().await?;
@@ -380,19 +379,19 @@ impl TelegramNotifier {
     }
 }
 
-/// Проверка самой дешёвой по конкретной модели
+/// Check for the cheapest offer for a specific model and notify if needed
 pub async fn check_and_notify_cheapest_for_model(
     model_name: &str,
     storage: Arc<Mutex<SqliteStorage>>,
     notifier: Arc<TelegramNotifier>,
     best_deal_ids: Arc<Mutex<HashMap<String, String>>>,
 ) {
-    info!("🔍 [cheapest] Старт проверки модели '{}'", model_name);
+    info!("🔍 [cheapest] Starting check for model '{}'", model_name);
 
     let offers = match storage.lock().await.get_all_offers() {
         Ok(o) => o,
         Err(e) => {
-            warn!("❌ [cheapest] Не удалось получить офферы для '{}': {:?}", model_name, e);
+            warn!("❌ [cheapest] Failed to get offers for '{}': {:?}", model_name, e);
             return;
         }
     };
@@ -403,13 +402,13 @@ pub async fn check_and_notify_cheapest_for_model(
         .collect();
 
     info!(
-        "📦 [cheapest] Найдено {} офферов для модели '{}'",
+        "📦 [cheapest] Found {} offers for model '{}'",
         model_offers.len(),
         model_name
     );
 
     if model_offers.is_empty() {
-        info!("ℹ️ [cheapest] Нет офферов для '{}'", model_name);
+        info!("ℹ️ [cheapest] No offers for '{}'", model_name);
         return;
     }
 
@@ -419,7 +418,7 @@ pub async fn check_and_notify_cheapest_for_model(
 
     if let Some(cheapest) = cheapest {
         info!(
-            "💰 [cheapest] Самое дешёвое: {:.2} € | {} | id={}",
+            "💰 [cheapest] Cheapest offer: {:.2} € | {} | id={}",
             cheapest.price, cheapest.link, cheapest.id
         );
 
@@ -427,43 +426,43 @@ pub async fn check_and_notify_cheapest_for_model(
 
         match map.get(model_name) {
             Some(prev_id) => {
-                info!("📌 [cheapest] Предыдущий id для '{}': {}", model_name, prev_id);
+                info!("📌 [cheapest] Previous id for '{}': {}", model_name, prev_id);
 
                 if prev_id == &cheapest.id {
                     info!(
-                        "✅ [cheapest] Предложение уже уведомлено: {} € (id={})",
+                        "✅ [cheapest] Offer already notified: {} € (id={})",
                         cheapest.price, cheapest.id
                     );
                     return;
                 } else {
                     info!(
-                        "🔁 [cheapest] Обновление! Старое id: {}, новое id: {}",
+                        "🔁 [cheapest] Updating! Old id: {}, new id: {}",
                         prev_id, cheapest.id
                     );
                 }
             }
             None => {
-                info!("🆕 [cheapest] Модель '{}' ещё не была уведомлена.", model_name);
+                info!("🆕 [cheapest] Model '{}' has not been notified yet.", model_name);
             }
         }
 
         info!(
-            "📤 [cheapest] Вызываем notify() для id={}, цена={:.2} €",
+            "📤 [cheapest] Calling notify() for id={}, price={:.2} €",
             cheapest.id, cheapest.price
         );
 
         match notifier.notify(cheapest).await {
             Ok(_) => {
-                info!("✅ [cheapest] Уведомление отправлено, сохраняем id.");
+                info!("✅ [cheapest] Notification sent, saving id.");
                 map.insert(model_name.to_string(), cheapest.id.clone());
             }
             Err(e) => {
-                warn!("❌ [cheapest] Ошибка при отправке уведомления: {:?}", e);
+                warn!("❌ [cheapest] Error sending notification: {:?}", e);
             }
         }
     } else {
         warn!(
-            "⚠️ [cheapest] Не удалось найти минимальное предложение для '{}'",
+            "⚠️ [cheapest] Failed to find the minimum offer for '{}'",
             model_name
         );
     }
