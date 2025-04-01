@@ -119,4 +119,6 @@ cargo run --release
 
 ## 📜 License
 
-MIT – do whatever you want, just don’t spam 🙃
+Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0) – 
+You may use, share, and adapt the code for non-commercial purposes as long as you provide attribution.
+See the [LICENSE](./LICENSE) file for more details.
