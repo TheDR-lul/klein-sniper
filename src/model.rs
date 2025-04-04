@@ -36,7 +36,6 @@ pub struct ScrapeRequest {
 #[derive(Debug)]
 pub enum ScraperError {
     HttpError(String),
-    Timeout,
     InvalidResponse(String),
     HtmlParseError(String),
 }

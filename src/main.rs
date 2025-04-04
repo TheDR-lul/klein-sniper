@@ -62,7 +62,6 @@ async fn main() {
         config.clone(),
         refresh_notify.clone(),
     ));
-    let best_deal_ids = Arc::new(Mutex::new(HashMap::<String, String>::new()));
 
     spawn_listener(notifier.clone());
 
