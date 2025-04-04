@@ -41,7 +41,7 @@ async fn main() {
         }
     };
 
-    // Base scraper instance; will clone its client for per-model config.
+    // Base scraper instance; its client will be cloned for each model's scraper.
     let base_scraper = ScraperImpl::new();
     let parser = KleinanzeigenParser::new();
     let analyzer = AnalyzerImpl::new();
@@ -62,7 +62,6 @@ async fn main() {
         config.clone(),
         refresh_notify.clone(),
     ));
-    let best_deal_ids = Arc::new(Mutex::new(HashMap::<String, String>::new()));
 
     spawn_listener(notifier.clone());
 
@@ -82,7 +81,7 @@ async fn main() {
                 category_id: model_cfg.category_id.clone(),
             };
 
-            // Create a scraper instance for this model with specific filters
+            // Create a scraper instance for the current model using settings from model_cfg.
             let scraper = ScraperImpl {
                 client: base_scraper.client.clone(),
                 category_id: model_cfg.category_id.clone(),
@@ -153,7 +152,6 @@ async fn main() {
                 &model_cfg.query,
                 storage.clone(),
                 notifier.clone(),
-                best_deal_ids.clone(),
             )
             .await;
 

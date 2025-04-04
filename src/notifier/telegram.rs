@@ -384,7 +384,6 @@ pub async fn check_and_notify_cheapest_for_model(
     model_name: &str,
     storage: Arc<Mutex<SqliteStorage>>,
     notifier: Arc<TelegramNotifier>,
-    best_deal_ids: Arc<Mutex<HashMap<String, String>>>,
 ) {
     info!("🔍 [cheapest] Starting check for model '{}'", model_name);
 
@@ -401,11 +400,7 @@ pub async fn check_and_notify_cheapest_for_model(
         .filter(|o| o.model == model_name && o.price.is_finite())
         .collect();
 
-    info!(
-        "📦 [cheapest] Found {} offers for model '{}'",
-        model_offers.len(),
-        model_name
-    );
+    info!("📦 [cheapest] Found {} offers for model '{}'", model_offers.len(), model_name);
 
     if model_offers.is_empty() {
         info!("ℹ️ [cheapest] No offers for '{}'", model_name);
@@ -417,54 +412,36 @@ pub async fn check_and_notify_cheapest_for_model(
         .min_by(|a, b| a.price.partial_cmp(&b.price).unwrap());
 
     if let Some(cheapest) = cheapest {
-        info!(
-            "💰 [cheapest] Cheapest offer: {:.2} € | {} | id={}",
-            cheapest.price, cheapest.link, cheapest.id
-        );
+        info!("💰 [cheapest] Cheapest offer: {:.2} € | {} | id={}", cheapest.price, cheapest.link, cheapest.id);
 
-        let mut map = best_deal_ids.lock().await;
-
-        match map.get(model_name) {
-            Some(prev_id) => {
-                info!("📌 [cheapest] Previous id for '{}': {}", model_name, prev_id);
-
-                if prev_id == &cheapest.id {
-                    info!(
-                        "✅ [cheapest] Offer already notified: {} € (id={})",
-                        cheapest.price, cheapest.id
-                    );
-                    return;
-                } else {
-                    info!(
-                        "🔁 [cheapest] Updating! Old id: {}, new id: {}",
-                        prev_id, cheapest.id
-                    );
-                }
+        let should_notify = match storage.lock().await.should_notify(&cheapest.id) {
+            Ok(flag) => flag,
+            Err(e) => {
+                warn!("❌ [cheapest] Error checking notification status: {:?}", e);
+                false
             }
-            None => {
-                info!("🆕 [cheapest] Model '{}' has not been notified yet.", model_name);
-            }
+        };
+
+        if !should_notify {
+            info!("✅ [cheapest] Offer already notified recently: {} € (id={})", cheapest.price, cheapest.id);
+            return;
         }
 
-        info!(
-            "📤 [cheapest] Calling notify() for id={}, price={:.2} €",
-            cheapest.id, cheapest.price
-        );
+        info!("📤 [cheapest] Calling notify() for id={}, price={:.2} €", cheapest.id, cheapest.price);
 
         match notifier.notify(cheapest).await {
             Ok(_) => {
                 info!("✅ [cheapest] Notification sent, saving id.");
-                map.insert(model_name.to_string(), cheapest.id.clone());
+                if let Err(e) = storage.lock().await.mark_notified(&cheapest.id) {
+                    warn!("❌ [cheapest] Mark notified failed: {:?}", e);
+                }
             }
             Err(e) => {
                 warn!("❌ [cheapest] Error sending notification: {:?}", e);
             }
         }
     } else {
-        warn!(
-            "⚠️ [cheapest] Failed to find the minimum offer for '{}'",
-            model_name
-        );
+        warn!("⚠️ [cheapest] Failed to find the minimum offer for '{}'", model_name);
     }
 }
 

@@ -1,5 +1,5 @@
 use crate::model::{ModelStats, Offer, StorageError};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc, NaiveDateTime,TimeZone}; 
 use rusqlite::{params, Connection};
 
 pub struct SqliteStorage {
@@ -35,10 +35,10 @@ impl SqliteStorage {
                 std_dev REAL NOT NULL,
                 last_updated TEXT NOT NULL
             );
-            "
+            ",
         )?;
 
-        // Автомиграции
+        // Automigrations
         Self::migrate_add_column_if_missing(&conn, "offers", "location", "TEXT NOT NULL DEFAULT ''")?;
         Self::migrate_add_column_if_missing(&conn, "offers", "description", "TEXT NOT NULL DEFAULT ''")?;
 
@@ -83,22 +83,6 @@ impl SqliteStorage {
         Ok(())
     }
 
-    /// Удаляет объявления, ID которых отсутствуют в списке current_ids.
-    /// Этот метод работает для всех моделей.
-    pub fn delete_missing_offers(&self, current_ids: &[String]) -> Result<(), StorageError> {
-        if current_ids.is_empty() {
-            self.conn.execute("DELETE FROM offers", [])?;
-            return Ok(());
-        }
-
-        let placeholders = current_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = format!("DELETE FROM offers WHERE id NOT IN ({})", placeholders);
-        let mut stmt = self.conn.prepare(&sql)?;
-        stmt.execute(rusqlite::params_from_iter(current_ids))?;
-        Ok(())
-    }
-
-    /// Новый метод: удаляет неактуальные объявления только для указанной модели.
     pub fn delete_missing_offers_for_model(&self, model: &str, current_ids: &[String]) -> Result<(), StorageError> {
         if current_ids.is_empty() {
             self.conn.execute("DELETE FROM offers WHERE model = ?1", params![model])?;
@@ -111,7 +95,6 @@ impl SqliteStorage {
             placeholders
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        // Первый параметр - модель, далее идут актуальные ID для этой модели.
         let mut params_vec = vec![model.to_string()];
         params_vec.extend(current_ids.iter().cloned());
         stmt.execute(rusqlite::params_from_iter(params_vec))?;
@@ -124,21 +107,35 @@ impl SqliteStorage {
         Ok(rows.next()?.is_some())
     }
 
-    pub fn mark_notified(&self, offer_id: &str) -> Result<(), StorageError> {
-        tracing::info!("📝 Marking offer as notified: {offer_id}");
-        match self.conn.execute(
-            "INSERT OR IGNORE INTO notified (offer_id, notified_at) VALUES (?1, datetime('now'))",
-            params![offer_id],
-        ) {
-            Ok(rows) => {
-                tracing::info!("✅ Marked as notified ({} row(s))", rows);
-                Ok(())
+    /// Returns true if no record exists or if more than 24 hours passed since last notification.
+    pub fn should_notify(&self, offer_id: &str) -> Result<bool, StorageError> {
+        let mut stmt = self.conn.prepare("SELECT notified_at FROM notified WHERE offer_id = ?1")?;
+        let mut rows = stmt.query(params![offer_id])?;
+    
+        if let Some(row) = rows.next()? {
+            let notified_at_str: String = row.get(0)?;
+            if notified_at_str.trim().is_empty() {
+                return Ok(true);
             }
-            Err(e) => {
-                tracing::error!("❌ mark_notified failed: {e}");
-                Err(StorageError::DatabaseError(e.to_string()))
-            }
+    
+            let notified_at_naive = NaiveDateTime::parse_from_str(&notified_at_str, "%Y-%m-%d %H:%M:%S")
+                .map_err(|e| StorageError::DatabaseError(format!("Invalid datetime: {}", e)))?;
+    
+            // 👇 вот тут исправлено
+            let notified_at: DateTime<Utc> = Utc.from_utc_datetime(&notified_at_naive);
+    
+            Ok(Utc::now().signed_duration_since(notified_at) > Duration::hours(24))
+        } else {
+            Ok(true)
         }
+    }    
+
+    pub fn mark_notified(&self, offer_id: &str) -> Result<(), StorageError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO notified (offer_id, notified_at) VALUES (?1, datetime('now'))",
+            params![offer_id],
+        )?;
+        Ok(())
     }
 
     pub fn get_stats(&self, model: &str) -> Result<Option<ModelStats>, StorageError> {
@@ -188,7 +185,7 @@ impl SqliteStorage {
         if let Some(row) = rows.next()? {
             let posted_at_str: String = row.get(5)?;
             let fetched_at_str: String = row.get(6)?;
-            let offer = Offer {
+            Ok(Some(Offer {
                 id: row.get(0)?,
                 title: row.get(1)?,
                 price: row.get(2)?,
@@ -198,8 +195,7 @@ impl SqliteStorage {
                 fetched_at: fetched_at_str.parse()?,
                 location: row.get(7)?,
                 description: row.get(8)?,
-            };
-            Ok(Some(offer))
+            }))
         } else {
             Ok(None)
         }
