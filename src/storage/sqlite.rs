@@ -121,7 +121,6 @@ impl SqliteStorage {
             let notified_at_naive = NaiveDateTime::parse_from_str(&notified_at_str, "%Y-%m-%d %H:%M:%S")
                 .map_err(|e| StorageError::DatabaseError(format!("Invalid datetime: {}", e)))?;
     
-            // 👇 вот тут исправлено
             let notified_at: DateTime<Utc> = Utc.from_utc_datetime(&notified_at_naive);
     
             Ok(Utc::now().signed_duration_since(notified_at) > Duration::hours(24))
