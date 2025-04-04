@@ -153,7 +153,6 @@ async fn main() {
                 &model_cfg.query,
                 storage.clone(),
                 notifier.clone(),
-                best_deal_ids.clone(),
             )
             .await;
 
