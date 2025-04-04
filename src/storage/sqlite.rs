@@ -1,5 +1,5 @@
 use crate::model::{ModelStats, Offer, StorageError};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use rusqlite::{params, Connection};
 
 pub struct SqliteStorage {
@@ -35,7 +35,7 @@ impl SqliteStorage {
                 std_dev REAL NOT NULL,
                 last_updated TEXT NOT NULL
             );
-            "
+            ",
         )?;
 
         // Automigrations
@@ -83,7 +83,6 @@ impl SqliteStorage {
         Ok(())
     }
 
-    /// Deletes offers for the given model whose IDs are not present in current_ids.
     pub fn delete_missing_offers_for_model(&self, model: &str, current_ids: &[String]) -> Result<(), StorageError> {
         if current_ids.is_empty() {
             self.conn.execute("DELETE FROM offers WHERE model = ?1", params![model])?;
@@ -108,41 +107,29 @@ impl SqliteStorage {
         Ok(rows.next()?.is_some())
     }
 
-    /// Checks if the offer should be notified again.
-    /// Returns true if no record exists or if more than 24 hours have passed since last notification.
+    /// Returns true if no record exists or if more than 24 hours passed since last notification.
     pub fn should_notify(&self, offer_id: &str) -> Result<bool, StorageError> {
         let mut stmt = self.conn.prepare("SELECT notified_at FROM notified WHERE offer_id = ?1")?;
         let mut rows = stmt.query(params![offer_id])?;
         if let Some(row) = rows.next()? {
             let notified_at_str: String = row.get(0)?;
-            let notified_at = notified_at_str
-            .parse::<DateTime<Utc>>()
-            .map_err(|e| StorageError::DatabaseError(e.to_string()))?;
-            // Используем chrono::Duration для сравнения.
-            if Utc::now() - notified_at > chrono::Duration::hours(24) {
-                Ok(true)
-            } else {
-                Ok(false)
+            if notified_at_str.trim().is_empty() {
+                return Ok(true);
             }
+            let notified_at: DateTime<Utc> = notified_at_str
+                .parse()
+                .map_err(|e| StorageError::DatabaseError(format!("Invalid datetime: {}", e)))?;
+            Ok(Utc::now() - notified_at > Duration::hours(24))
         } else {
-            // Если записи нет, значит оффер ещё не уведомлялся.
             Ok(true)
         }
     }
 
-    /// Marks an offer as notified.
-    /// If a record already exists, updates the timestamp; otherwise, inserts a new record.
     pub fn mark_notified(&self, offer_id: &str) -> Result<(), StorageError> {
-        let rows = self.conn.execute(
-            "UPDATE notified SET notified_at = datetime('now') WHERE offer_id = ?1",
+        self.conn.execute(
+            "INSERT OR REPLACE INTO notified (offer_id, notified_at) VALUES (?1, datetime('now'))",
             params![offer_id],
         )?;
-        if rows == 0 {
-            self.conn.execute(
-                "INSERT INTO notified (offer_id, notified_at) VALUES (?1, datetime('now'))",
-                params![offer_id],
-            )?;
-        }
         Ok(())
     }
 
@@ -193,7 +180,7 @@ impl SqliteStorage {
         if let Some(row) = rows.next()? {
             let posted_at_str: String = row.get(5)?;
             let fetched_at_str: String = row.get(6)?;
-            let offer = Offer {
+            Ok(Some(Offer {
                 id: row.get(0)?,
                 title: row.get(1)?,
                 price: row.get(2)?,
@@ -203,8 +190,7 @@ impl SqliteStorage {
                 fetched_at: fetched_at_str.parse()?,
                 location: row.get(7)?,
                 description: row.get(8)?,
-            };
-            Ok(Some(offer))
+            }))
         } else {
             Ok(None)
         }
