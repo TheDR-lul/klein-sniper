@@ -83,20 +83,6 @@ impl SqliteStorage {
         Ok(())
     }
 
-    /// Deletes offers whose IDs are not present in the provided current_ids slice.
-    pub fn delete_missing_offers(&self, current_ids: &[String]) -> Result<(), StorageError> {
-        if current_ids.is_empty() {
-            self.conn.execute("DELETE FROM offers", [])?;
-            return Ok(());
-        }
-
-        let placeholders = current_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = format!("DELETE FROM offers WHERE id NOT IN ({})", placeholders);
-        let mut stmt = self.conn.prepare(&sql)?;
-        stmt.execute(rusqlite::params_from_iter(current_ids))?;
-        Ok(())
-    }
-
     /// Deletes offers for the given model whose IDs are not present in current_ids.
     pub fn delete_missing_offers_for_model(&self, model: &str, current_ids: &[String]) -> Result<(), StorageError> {
         if current_ids.is_empty() {
