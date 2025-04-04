@@ -38,7 +38,7 @@ impl SqliteStorage {
             "
         )?;
 
-        // Автомиграции
+        // Automigrations
         Self::migrate_add_column_if_missing(&conn, "offers", "location", "TEXT NOT NULL DEFAULT ''")?;
         Self::migrate_add_column_if_missing(&conn, "offers", "description", "TEXT NOT NULL DEFAULT ''")?;
 
@@ -83,8 +83,7 @@ impl SqliteStorage {
         Ok(())
     }
 
-    /// Удаляет объявления, ID которых отсутствуют в списке current_ids.
-    /// Этот метод работает для всех моделей.
+    /// Deletes offers whose IDs are not present in the provided current_ids slice.
     pub fn delete_missing_offers(&self, current_ids: &[String]) -> Result<(), StorageError> {
         if current_ids.is_empty() {
             self.conn.execute("DELETE FROM offers", [])?;
@@ -98,7 +97,7 @@ impl SqliteStorage {
         Ok(())
     }
 
-    /// Новый метод: удаляет неактуальные объявления только для указанной модели.
+    /// Deletes offers for the given model whose IDs are not present in current_ids.
     pub fn delete_missing_offers_for_model(&self, model: &str, current_ids: &[String]) -> Result<(), StorageError> {
         if current_ids.is_empty() {
             self.conn.execute("DELETE FROM offers WHERE model = ?1", params![model])?;
@@ -111,7 +110,6 @@ impl SqliteStorage {
             placeholders
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        // Первый параметр - модель, далее идут актуальные ID для этой модели.
         let mut params_vec = vec![model.to_string()];
         params_vec.extend(current_ids.iter().cloned());
         stmt.execute(rusqlite::params_from_iter(params_vec))?;
@@ -124,21 +122,42 @@ impl SqliteStorage {
         Ok(rows.next()?.is_some())
     }
 
-    pub fn mark_notified(&self, offer_id: &str) -> Result<(), StorageError> {
-        tracing::info!("📝 Marking offer as notified: {offer_id}");
-        match self.conn.execute(
-            "INSERT OR IGNORE INTO notified (offer_id, notified_at) VALUES (?1, datetime('now'))",
-            params![offer_id],
-        ) {
-            Ok(rows) => {
-                tracing::info!("✅ Marked as notified ({} row(s))", rows);
-                Ok(())
+    /// Checks if the offer should be notified again.
+    /// Returns true if no record exists or if more than 24 hours have passed since last notification.
+    pub fn should_notify(&self, offer_id: &str) -> Result<bool, StorageError> {
+        let mut stmt = self.conn.prepare("SELECT notified_at FROM notified WHERE offer_id = ?1")?;
+        let mut rows = stmt.query(params![offer_id])?;
+        if let Some(row) = rows.next()? {
+            let notified_at_str: String = row.get(0)?;
+            let notified_at = notified_at_str
+            .parse::<DateTime<Utc>>()
+            .map_err(|e| StorageError::DatabaseError(e.to_string()))?;
+            // Используем chrono::Duration для сравнения.
+            if Utc::now() - notified_at > chrono::Duration::hours(24) {
+                Ok(true)
+            } else {
+                Ok(false)
             }
-            Err(e) => {
-                tracing::error!("❌ mark_notified failed: {e}");
-                Err(StorageError::DatabaseError(e.to_string()))
-            }
+        } else {
+            // Если записи нет, значит оффер ещё не уведомлялся.
+            Ok(true)
         }
+    }
+
+    /// Marks an offer as notified.
+    /// If a record already exists, updates the timestamp; otherwise, inserts a new record.
+    pub fn mark_notified(&self, offer_id: &str) -> Result<(), StorageError> {
+        let rows = self.conn.execute(
+            "UPDATE notified SET notified_at = datetime('now') WHERE offer_id = ?1",
+            params![offer_id],
+        )?;
+        if rows == 0 {
+            self.conn.execute(
+                "INSERT INTO notified (offer_id, notified_at) VALUES (?1, datetime('now'))",
+                params![offer_id],
+            )?;
+        }
+        Ok(())
     }
 
     pub fn get_stats(&self, model: &str) -> Result<Option<ModelStats>, StorageError> {

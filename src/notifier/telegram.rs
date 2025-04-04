@@ -422,12 +422,23 @@ pub async fn check_and_notify_cheapest_for_model(
             cheapest.price, cheapest.link, cheapest.id
         );
 
-        let mut map = best_deal_ids.lock().await;
+        // Сначала проверяем, можно ли уведомлять (если прошло 24 часа или записи нет)
+        match storage.lock().await.should_notify(&cheapest.id) {
+            Ok(false) => {
+                info!("✅ [cheapest] Already notified within the period: {} (id={})", cheapest.price, cheapest.id);
+                return;
+            }
+            Ok(true) => {} // можно уведомлять
+            Err(e) => {
+                warn!("❌ [cheapest] Notify check failed: {:?}", e);
+                return;
+            }
+        }
 
+        let mut map = best_deal_ids.lock().await;
         match map.get(model_name) {
             Some(prev_id) => {
                 info!("📌 [cheapest] Previous id for '{}': {}", model_name, prev_id);
-
                 if prev_id == &cheapest.id {
                     info!(
                         "✅ [cheapest] Offer already notified: {} € (id={})",
@@ -455,6 +466,9 @@ pub async fn check_and_notify_cheapest_for_model(
             Ok(_) => {
                 info!("✅ [cheapest] Notification sent, saving id.");
                 map.insert(model_name.to_string(), cheapest.id.clone());
+                if let Err(e) = storage.lock().await.mark_notified(&cheapest.id) {
+                    warn!("❌ [cheapest] Mark notified failed: {:?}", e);
+                }
             }
             Err(e) => {
                 warn!("❌ [cheapest] Error sending notification: {:?}", e);

@@ -14,10 +14,10 @@ const USER_AGENTS: [&str; 5] = [
 ];
 
 pub struct ScraperImpl {
-    pub client: Client,
-    pub category_id: String,
-    pub min_price: f64,
-    pub max_price: f64,
+    pub client: Client,          
+    pub category_id: String, 
+    pub min_price: f64,          
+    pub max_price: f64,          
 }
 
 impl ScraperImpl {
@@ -45,10 +45,10 @@ impl ScraperImpl {
 
     /// Builds the URL for the request.
     /// If price filters are set (min_price > 0.0 or max_price > 0.0),
-    /// the URL is in the form:
+    /// then for the first page the URL is in the form:
     ///   https://www.kleinanzeigen.de/s-preis:{min_price}:{max_price}/{query}/{category_id}
-    /// For subsequent pages:
-    ///   https://www.kleinanzeigen.de/s-seite:{page}-preis:{min_price}:{max_price}/{query}/{category_id}
+    /// and for subsequent pages:
+    ///   https://www.kleinanzeigen.de/s-preis:{min_price}:{max_price}/seite:{page}/{query}/{category_id}
     /// Otherwise, the basic URL format is used.
     fn build_url(&self, req: &ScrapeRequest, page: usize) -> String {
         let kebab_query = req.query.to_lowercase().replace(" ", "-");
