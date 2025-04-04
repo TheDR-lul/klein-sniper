@@ -1,5 +1,3 @@
-// src/main.rs
-
 mod config;
 mod model;
 mod scraper;
@@ -38,25 +36,25 @@ async fn main() {
     let config = match load_config("config.json") {
         Ok(cfg) => Arc::new(cfg),
         Err(e) => {
-            error!("❌ Config load error: {e}");
+            error!("Config load error: {}", e);
             return;
         }
     };
 
-    let scraper = ScraperImpl::new();
+    // Base scraper instance; will clone its client for per-model config.
+    let base_scraper = ScraperImpl::new();
     let parser = KleinanzeigenParser::new();
     let analyzer = AnalyzerImpl::new();
 
     let storage = match SqliteStorage::new("data.db") {
         Ok(s) => Arc::new(Mutex::new(s)),
         Err(e) => {
-            error!("❌ Failed to initialize storage: {e:?}");
+            error!("Failed to initialize storage: {:?}", e);
             return;
         }
     };
 
     let refresh_notify = Arc::new(Notify::new());
-    // Создаем нотификатор без оборачивания в Mutex
     let notifier = Arc::new(TelegramNotifier::new(
         config.telegram_bot_token.clone(),
         config.telegram_chat_id,
@@ -66,30 +64,40 @@ async fn main() {
     ));
     let best_deal_ids = Arc::new(Mutex::new(HashMap::<String, String>::new()));
 
-    // Запускаем прослушиватель команд в отдельной задаче
     spawn_listener(notifier.clone());
 
-    info!("📨 Sending startup message...");
-    if let Err(e) = notifier.notify_text("🚀 KleinSniper запущен!").await {
-        warn!("Startup notification failed: {e:?}");
+    info!("Sending startup message...");
+    if let Err(e) = notifier.notify_text("🚀 KleinSniper started!").await {
+        warn!("Startup notification failed: {:?}", e);
     }
 
     loop {
-        info!("🔁 Entering main loop...");
-        info!("📦 Models to process: {}", config.models.len());
+        info!("Entering main loop...");
+        info!("Models to process: {}", config.models.len());
 
         for model_cfg in &config.models {
-            info!("🔄 Processing: {}", model_cfg.query);
+            info!("Processing: {}", model_cfg.query);
             let request = ScrapeRequest {
                 query: model_cfg.query.clone(),
                 category_id: model_cfg.category_id.clone(),
             };
 
+            // Create a scraper instance for this model with specific filters
+            let scraper = ScraperImpl {
+                client: base_scraper.client.clone(),
+                category_id: model_cfg.category_id.clone(),
+                min_price: model_cfg.min_price,
+                max_price: model_cfg.max_price,
+            };
+
             if let Ok(Some(prev_stats)) = storage.lock().await.get_stats(&model_cfg.query) {
-                info!("ℹ️ Previous stats: {:.2} € | Updated: {}", prev_stats.avg_price, prev_stats.last_updated);
+                info!(
+                    "Previous stats: {:.2} € | Updated: {}",
+                    prev_stats.avg_price, prev_stats.last_updated
+                );
             }
 
-            info!("🌐 Fetching offers...");
+            info!("Fetching offers...");
             let html = match scraper.fetch(&request).await {
                 Ok(html) => html,
                 Err(model::ScraperError::InvalidResponse(html)) => {
@@ -97,17 +105,17 @@ async fn main() {
                     continue;
                 }
                 Err(e) => {
-                    warn!("❌ Scraper error: {e:?}");
+                    warn!("Scraper error: {:?}", e);
                     continue;
                 }
             };
 
-            info!("🧩 Parsing HTML...");
+            info!("Parsing HTML...");
             let mut offers = match parser.parse_filtered(&html, model_cfg) {
                 Ok(o) => o,
                 Err(e) => {
                     log_and_save_html(&html, &model_cfg.query);
-                    warn!("❌ Parse error: {e:?}");
+                    warn!("Parse error: {:?}", e);
                     continue;
                 }
             };
@@ -118,90 +126,97 @@ async fn main() {
             for offer in &offers {
                 seen_ids.insert(offer.id.clone());
                 if let Err(e) = storage.lock().await.save_offer(offer) {
-                    warn!("DB save error: {e:?}");
+                    warn!("DB save error: {:?}", e);
                 }
             }
 
             let seen_vec: Vec<String> = seen_ids.into_iter().collect();
-            info!("🧹 Cleaning up old offers for model {}...", model_cfg.query);
-            // Вызываем метод с фильтрацией по модели, чтобы удалялись только устаревшие объявления для данной модели
-            if let Err(e) = storage.lock().await.delete_missing_offers_for_model(&model_cfg.query, &seen_vec) {
-                warn!("Delete missing error: {e:?}");
+            info!("Cleaning up old offers for model {}...", model_cfg.query);
+            if let Err(e) = storage
+                .lock()
+                .await
+                .delete_missing_offers_for_model(&model_cfg.query, &seen_vec)
+            {
+                warn!("Delete missing error: {:?}", e);
             }
 
             let stats = analyzer.calculate_stats(&offers);
-            info!("📈 Stats: avg = {:.2}, std_dev = {:.2}", stats.avg_price, stats.std_dev);
+            info!("Stats: avg = {:.2}, std_dev = {:.2}", stats.avg_price, stats.std_dev);
 
-            info!("📥 Updating stats...");
+            info!("Updating stats...");
             if let Err(e) = storage.lock().await.update_stats(&stats) {
-                warn!("Stats update failed: {e:?}");
+                warn!("Stats update failed: {:?}", e);
             }
 
-            info!("🧪 Notifying cheapest...");
+            info!("Notifying cheapest...");
             check_and_notify_cheapest_for_model(
                 &model_cfg.query,
                 storage.clone(),
                 notifier.clone(),
                 best_deal_ids.clone(),
-            ).await;
+            )
+            .await;
 
             let good_offers = analyzer.find_deals(&offers, &stats, model_cfg);
-            info!("✅ Good offers: {}", good_offers.len());
+            info!("Good offers: {}", good_offers.len());
 
             for offer in good_offers {
-                info!("💡 Checking offer: {} — {:.2} €", offer.id, offer.price);
+                info!("Checking offer: {} — {:.2} €", offer.id, offer.price);
 
                 match storage.lock().await.is_notified(&offer.id) {
                     Ok(true) => {
-                        info!("🔕 Already notified: {}", offer.id);
+                        info!("Already notified: {}", offer.id);
                         continue;
                     }
                     Ok(false) => {}
                     Err(e) => {
-                        warn!("❌ Notify check failed: {e:?}");
+                        warn!("Notify check failed: {:?}", e);
                         continue;
                     }
                 }
 
-                info!("📤 Sending Telegram notification...");
+                info!("Sending Telegram notification...");
                 if let Err(e) = notifier.notify(&offer).await {
-                    warn!("Telegram send error: {e:?}");
+                    warn!("Telegram send error: {:?}", e);
                 } else if let Err(e) = storage.lock().await.mark_notified(&offer.id) {
-                    warn!("Mark notified failed: {e:?}");
+                    warn!("Mark notified failed: {:?}", e);
                 } else {
-                    info!("✅ Offer notified and marked.");
+                    info!("Offer notified and marked.");
                 }
             }
 
-            info!("✔️ Finished model: {}", model_cfg.query);
+            info!("Finished model: {}", model_cfg.query);
         }
 
-        info!("⏳ Waiting for timer ({}s) or /refresh...", config.check_interval_seconds);
+        info!(
+            "Waiting for timer ({}s) or /refresh...",
+            config.check_interval_seconds
+        );
 
         tokio::select! {
             _ = sleep(Duration::from_secs(config.check_interval_seconds)) => {
-                info!("⏰ Timer triggered.");
+                info!("Timer triggered.");
             }
             _ = refresh_notify.notified() => {
-                info!("🔁 Manual refresh triggered.");
+                info!("Manual refresh triggered.");
             }
         }
 
-        info!("🔁 Restarting main loop...");
+        info!("Restarting main loop...");
     }
 }
 
 fn log_and_save_html(html: &str, query: &str) {
     let folder = Path::new("logs/html");
     if let Err(e) = fs::create_dir_all(folder) {
-        warn!("Failed to create debug folder: {e}");
+        warn!("Failed to create debug folder: {}", e);
         return;
     }
 
     let filename = folder.join(format!("debug-{}.html", query.replace(' ', "_")));
     if let Err(e) = fs::write(&filename, html) {
-        warn!("Failed to write debug HTML: {e}");
+        warn!("Failed to write debug HTML: {}", e);
     } else {
-        info!("📄 Saved debug HTML: {}", filename.display());
+        info!("Saved debug HTML: {}", filename.display());
     }
 }
