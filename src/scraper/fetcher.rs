@@ -14,7 +14,7 @@ const USER_AGENTS: [&str; 5] = [
 ];
 
 pub struct ScraperImpl {
-    pub client: Client, // now public for cloning
+    pub client: Client,
     pub category_id: String,
     pub min_price: f64,
     pub max_price: f64,
@@ -55,23 +55,23 @@ impl ScraperImpl {
         if self.min_price > 0.0 || self.max_price > 0.0 {
             if page == 1 {
                 format!(
-                    "https://www.kleinanzeigen.de/s-preis:{}:{}/{}/{}",
-                    self.min_price, self.max_price, kebab_query, req.category_id
+                    "https://www.kleinanzeigen.de/s-preis:{0}:{1}/{2}/{3}",
+                    self.min_price, self.max_price, kebab_query, self.category_id
                 )
             } else {
                 format!(
-                    "https://www.kleinanzeigen.de/s-preis:{}:{}/seite:{}/{}/{}",
-                    self.min_price, self.max_price, page, kebab_query, req.category_id
+                    "https://www.kleinanzeigen.de/s-preis:{0}:{1}/seite:{2}/{3}/{4}",
+                    self.min_price, self.max_price, page, kebab_query, self.category_id
                 )
             }
         } else {
             if page == 1 {
-                format!("https://www.kleinanzeigen.de/s-{}/{}", kebab_query, req.category_id)
+                format!("https://www.kleinanzeigen.de/s-{0}/{1}", kebab_query, self.category_id)
             } else {
-                format!("https://www.kleinanzeigen.de/s-seite:{}/{}/{}", page, kebab_query, req.category_id)
+                format!("https://www.kleinanzeigen.de/s-seite:{0}/{1}/{2}", page, kebab_query, self.category_id)
             }
         }
-    }    
+    }
 
     async fn apply_delay(&self) {
         sleep(Duration::from_secs(1)).await;
