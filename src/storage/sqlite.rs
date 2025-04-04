@@ -1,5 +1,5 @@
 use crate::model::{ModelStats, Offer, StorageError};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, Utc, NaiveDateTime,TimeZone}; 
 use rusqlite::{params, Connection};
 
 pub struct SqliteStorage {
@@ -111,19 +111,24 @@ impl SqliteStorage {
     pub fn should_notify(&self, offer_id: &str) -> Result<bool, StorageError> {
         let mut stmt = self.conn.prepare("SELECT notified_at FROM notified WHERE offer_id = ?1")?;
         let mut rows = stmt.query(params![offer_id])?;
+    
         if let Some(row) = rows.next()? {
             let notified_at_str: String = row.get(0)?;
             if notified_at_str.trim().is_empty() {
                 return Ok(true);
             }
-            let notified_at: DateTime<Utc> = notified_at_str
-                .parse()
+    
+            let notified_at_naive = NaiveDateTime::parse_from_str(&notified_at_str, "%Y-%m-%d %H:%M:%S")
                 .map_err(|e| StorageError::DatabaseError(format!("Invalid datetime: {}", e)))?;
-            Ok(Utc::now() - notified_at > Duration::hours(24))
+    
+            // 👇 вот тут исправлено
+            let notified_at: DateTime<Utc> = Utc.from_utc_datetime(&notified_at_naive);
+    
+            Ok(Utc::now().signed_duration_since(notified_at) > Duration::hours(24))
         } else {
             Ok(true)
         }
-    }
+    }    
 
     pub fn mark_notified(&self, offer_id: &str) -> Result<(), StorageError> {
         self.conn.execute(
