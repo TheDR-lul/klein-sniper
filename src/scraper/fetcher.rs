@@ -14,7 +14,10 @@ const USER_AGENTS: [&str; 5] = [
 ];
 
 pub struct ScraperImpl {
-    client: Client,
+    pub client: Client, // now public for cloning
+    pub category_id: String,
+    pub min_price: f64,
+    pub max_price: f64,
 }
 
 impl ScraperImpl {
@@ -32,24 +35,49 @@ impl ScraperImpl {
             .build()
             .unwrap();
 
-        Self { client }
-    }
-
-    fn build_url(&self, req: &ScrapeRequest, page: usize) -> String {
-        let kebab_query = req.query.to_lowercase().replace(" ", "-");
-        if page == 1 {
-            format!("https://www.kleinanzeigen.de/s-{}/{}", kebab_query, req.category_id)
-        } else {
-            format!("https://www.kleinanzeigen.de/s-seite:{}/{}/{}", page, kebab_query, req.category_id)
+        Self {
+            client,
+            category_id: String::new(),
+            min_price: 0.0,
+            max_price: 0.0,
         }
     }
+
+    /// Builds the URL for the request.
+    /// If price filters are set (min_price > 0.0 or max_price > 0.0),
+    /// the URL is in the form:
+    ///   https://www.kleinanzeigen.de/s-preis:{min_price}:{max_price}/{query}/{category_id}
+    /// For subsequent pages:
+    ///   https://www.kleinanzeigen.de/s-seite:{page}-preis:{min_price}:{max_price}/{query}/{category_id}
+    /// Otherwise, the basic URL format is used.
+    fn build_url(&self, req: &ScrapeRequest, page: usize) -> String {
+        let kebab_query = req.query.to_lowercase().replace(" ", "-");
+        if self.min_price > 0.0 || self.max_price > 0.0 {
+            if page == 1 {
+                format!(
+                    "https://www.kleinanzeigen.de/s-preis:{}:{}/{}/{}",
+                    self.min_price, self.max_price, kebab_query, req.category_id
+                )
+            } else {
+                format!(
+                    "https://www.kleinanzeigen.de/s-preis:{}:{}/seite:{}/{}/{}",
+                    self.min_price, self.max_price, page, kebab_query, req.category_id
+                )
+            }
+        } else {
+            if page == 1 {
+                format!("https://www.kleinanzeigen.de/s-{}/{}", kebab_query, req.category_id)
+            } else {
+                format!("https://www.kleinanzeigen.de/s-seite:{}/{}/{}", page, kebab_query, req.category_id)
+            }
+        }
+    }    
 
     async fn apply_delay(&self) {
         sleep(Duration::from_secs(1)).await;
     }
 }
 
-#[async_trait::async_trait]
 #[async_trait::async_trait]
 impl Scraper for ScraperImpl {
     async fn fetch(&self, req: &ScrapeRequest) -> Result<String, ScraperError> {
@@ -64,7 +92,7 @@ impl Scraper for ScraperImpl {
         for page in 1..=max_pages {
             self.apply_delay().await;
             let url = self.build_url(req, page);
-            tracing::info!("📄 Fetching page {}: {}", page, url);
+            tracing::info!("Fetching page {}: {}", page, url);
 
             let response = match self.client.get(&url).send().await {
                 Ok(resp) => resp,
@@ -83,10 +111,10 @@ impl Scraper for ScraperImpl {
 
             let doc = Html::parse_document(&html);
             let items: Vec<_> = doc.select(&item_selector).collect();
-            tracing::info!("✅ Parsed {} items from page {}", items.len(), page);
+            tracing::info!("Parsed {} items from page {}", items.len(), page);
 
             if items.is_empty() {
-                tracing::info!("🛑 No items found on page {}, stopping.", page);
+                tracing::info!("No items found on page {}, stopping.", page);
                 break;
             }
 
@@ -98,7 +126,7 @@ impl Scraper for ScraperImpl {
 
             if let (Some(current), Some(last)) = (&first_ad_id, &last_first_ad_id) {
                 if current == last {
-                    tracing::info!("🌀 Duplicate first item detected on page {}, stopping.", page);
+                    tracing::info!("Duplicate first item detected on page {}, stopping.", page);
                     break;
                 }
             }
