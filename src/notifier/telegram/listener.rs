@@ -1,11 +1,8 @@
 // notifier/telegram/listener.rs
 
 use crate::notifier::telegram::command_handler::handle_command;
-use reqwest::Client;
 use serde::Deserialize;
-use std::sync::Arc;
 use tokio::time::{sleep, Duration};
-use tracing::{info, warn};
 use crate::notifier::telegram::TelegramNotifier;
 
 #[derive(Debug, Deserialize)]
