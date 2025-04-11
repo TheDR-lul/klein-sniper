@@ -2,6 +2,8 @@
 use crate::model::{Offer, ModelStats};
 use crate::config::ModelConfig;
 use chrono::Utc;
+use crate::analyzer::market_indicators::MarketAnalyzer;
+use crate::analyzer::lifecycle::build_lifecycle_data;
 
 pub trait Analyzer {
     fn calculate_stats(&self, offers: &[Offer]) -> ModelStats;
@@ -49,5 +51,25 @@ impl Analyzer for AnalyzerImpl {
         }
 
         result
+    }
+}
+pub struct AnalysisResult {
+    pub disappearance_map: std::collections::HashMap<crate::analyzer::market_indicators::PriceRange, chrono::Duration>,
+    pub price_change_frequency: f64,
+    pub rsi: f64,
+}
+
+impl AnalyzerImpl {
+    pub async fn analyze_offers(&self, offers: &[crate::model::Offer]) -> AnalysisResult {
+        let lifecycles = build_lifecycle_data(offers).await;
+        let disappearance_map = MarketAnalyzer::disappearance_speed(&lifecycles);
+        let freq = MarketAnalyzer::price_change_frequency(&lifecycles);
+        let rsi = MarketAnalyzer::compute_rsi(&[lifecycles.iter().map(|o| o.price as f64).sum::<f64>() / lifecycles.len() as f64]);
+
+        AnalysisResult {
+            disappearance_map,
+            price_change_frequency: freq,
+            rsi,
+        }
     }
 }
