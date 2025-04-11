@@ -10,11 +10,11 @@ pub async fn build_lifecycle_data(offers: &[Offer]) -> Vec<OfferLifecycle> {
             price: offer.price,
             first_seen: offer.fetched_at,
             last_seen: offer.fetched_at,
-            price_changes: 0.0,
+            price_changes: 0,
         });
 
         if (offer.price - entry.price).abs() > f64::EPSILON {
-            entry.price_changes += 1.0;
+            entry.price_changes += 1;
             entry.price = offer.price;
         }
 
