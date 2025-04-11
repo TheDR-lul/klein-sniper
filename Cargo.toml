@@ -1,6 +1,6 @@
 [package]
 name = "klein-sniper"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 [dependencies]
@@ -16,6 +16,7 @@ async-trait = "0.1.88"
 tracing ="0.1.41"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 rand ="0.9.0"
+futures = "0.3.31"
 
 [build-dependencies]
 winres = "0.1"
