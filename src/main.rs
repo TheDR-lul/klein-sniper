@@ -8,9 +8,9 @@ mod notifier;
 mod storage;
 
 use analyzer::AnalyzerImpl;
-use notifier::telegram::{check_and_notify_cheapest_for_model, spawn_listener, TelegramNotifier};
+use notifier::TelegramNotifier;
 use crate::analyzer::price_analysis::Analyzer;
-use config::load_config;
+use config::{load_config, AppConfig, ModelConfig};
 use model::ScrapeRequest;
 use scraper::{Scraper, ScraperImpl};
 use parser::KleinanzeigenParser;
@@ -24,6 +24,7 @@ use tokio::sync::{Mutex, Notify};
 use tokio::time::{sleep, Duration};
 use tracing::{error, info, warn};
 use tracing_subscriber;
+use futures::future::join_all;
 
 #[tokio::main]
 async fn main() {
@@ -36,7 +37,7 @@ async fn main() {
     }));
 
     // Load configuration from file
-    let config = match load_config("config.json") {
+    let config: Arc<AppConfig> = match load_config("config.json") {
         Ok(cfg) => Arc::new(cfg),
         Err(e) => {
             error!("Config load error: {}", e);
@@ -69,7 +70,7 @@ async fn main() {
     ));
 
     // Spawn listener for manual refresh (e.g. via /refresh command)
-    spawn_listener(notifier.clone());
+    TelegramNotifier::spawn_listener(notifier.clone());
 
     info!("Sending startup message...");
     if let Err(e) = notifier.notify_text("🚀 KleinSniper started!").await {
@@ -81,146 +82,20 @@ async fn main() {
         info!("Entering main loop...");
         info!("Models to process: {}", config.models.len());
 
-        for model_cfg in &config.models {
-            info!("Processing model: {}", model_cfg.query);
-            let request = ScrapeRequest {
-                query: model_cfg.query.clone(),
-                category_id: model_cfg.category_id.clone(),
-            };
-
-            // Create a scraper instance for the current model (cloning the client)
-            let scraper = ScraperImpl {
-                client: base_scraper.client.clone(),
-                category_id: model_cfg.category_id.clone(),
-                min_price: model_cfg.min_price,
-                max_price: model_cfg.max_price,
-            };
-
-            // Optionally, retrieve previous stats from storage for logging
-            {
-                let storage_guard = storage.lock().await;
-                if let Ok(Some(prev_stats)) = storage_guard.get_stats(&model_cfg.query) {
-                    info!(
-                        "Previous stats: {:.2} € | Updated: {}",
-                        prev_stats.avg_price, prev_stats.last_updated
-                    );
-                }
-            }
-
-            info!("Fetching offers...");
-            // Fetch HTML page for the current request
-            let html = match scraper.fetch(&request).await {
-                Ok(html) => html,
-                Err(model::ScraperError::InvalidResponse(html)) => {
-                    log_and_save_html(&html, &model_cfg.query);
-                    continue;
-                }
-                Err(e) => {
-                    warn!("Scraper error: {:?}", e);
-                    continue;
-                }
-            };
-
-            info!("Parsing HTML...");
-            // Parse offers from the HTML
-            let mut offers = match parser.parse_filtered(&html, model_cfg) {
-                Ok(o) => o,
-                Err(e) => {
-                    log_and_save_html(&html, &model_cfg.query);
-                    warn!("Parse error: {:?}", e);
-                    continue;
-                }
-            };
-
-            // Normalize offers based on configuration settings
-            normalize_all(&mut offers, &config.models);
-
-            // Save offers into storage and record seen IDs
-            let mut seen_ids = HashSet::new();
-            for offer in &offers {
-                seen_ids.insert(offer.id.clone());
-                if let Err(e) = storage.lock().await.save_offer(offer) {
-                    warn!("DB save error: {:?}", e);
-                }
-            }
-            let seen_vec: Vec<String> = seen_ids.into_iter().collect();
-
-            info!("Cleaning up old offers for model {}...", model_cfg.query);
-            if let Err(e) = storage
-                .lock()
-                .await
-                .delete_missing_offers_for_model(&model_cfg.query, &seen_vec)
-            {
-                warn!("Delete missing error: {:?}", e);
-            }
-
-            // Perform asynchronous extended analysis of the offers
-            info!("Performing extended asynchronous analysis...");
-            let analysis_result = analyzer.analyze_offers(&offers).await;
-            info!("Advanced Analysis Results:");
-            for (range, duration) in analysis_result.disappearance_map.iter() {
-                info!(
-                    "Price Range {}-{}: Average Lifespan (s): {}",
-                    range.0,
-                    range.1,
-                    duration.num_seconds()
-                );
-            }
-            info!("Price Change Frequency: {}", analysis_result.price_change_frequency);
-            info!("RSI: {}", analysis_result.rsi);
-
-            // Calculate basic statistics for the offers
-            let stats = analyzer.calculate_stats(&offers);
-            info!(
-                "Base Stats: avg = {:.2}, std_dev = {:.2}",
-                stats.avg_price, stats.std_dev
-            );
-
-            info!("Updating stats in storage...");
-            if let Err(e) = storage.lock().await.update_stats(&stats) {
-                warn!("Stats update failed: {:?}", e);
-            }
-
-            info!("Notifying cheapest offers...");
-            check_and_notify_cheapest_for_model(
-                &model_cfg.query,
+        // Process all models concurrently
+        let tasks: Vec<_> = config.models.iter().map(|model_cfg| {
+            process_model(
+                model_cfg,
+                &base_scraper,
+                &parser,
+                &analyzer,
                 storage.clone(),
+                config.clone(),
+                refresh_notify.clone(),
                 notifier.clone(),
             )
-            .await;
-
-            // Find "good" offers using the analyzer's deal finding method
-            let good_offers = analyzer.find_deals(&offers, &stats, model_cfg);
-            info!("Found {} good offers", good_offers.len());
-
-            // Process each good offer and send notifications if necessary
-            for offer in good_offers {
-                info!("Checking offer: {} — {:.2} €", offer.id, offer.price);
-
-                match storage.lock().await.is_notified(&offer.id) {
-                    Ok(true) => {
-                        info!("Already notified: {}", offer.id);
-                        continue;
-                    }
-                    Ok(false) => {}
-                    Err(e) => {
-                        warn!("Notify check failed: {:?}", e);
-                        continue;
-                    }
-                }
-
-                info!("Sending Telegram notification...");
-                if let Err(e) = notifier.notify(&offer).await {
-                    warn!("Telegram send error: {:?}", e);
-                } else if let Err(e) = storage.lock().await.mark_notified(&offer.id) {
-                    warn!("Mark notified failed: {:?}", e);
-                } else {
-                    info!("Offer notified and marked.");
-                }
-            }
-
-            info!("Finished processing model: {}", model_cfg.query);
-        }
+        }).collect();
+        join_all(tasks).await;
 
         info!(
             "Waiting for timer ({}s) or manual refresh...",
@@ -236,6 +111,158 @@ async fn main() {
         }
         info!("Restarting main loop...");
     }
+}
+
+/// Processes a single model, performing scraping, parsing, normalization, analysis and notifications.
+/// The functionality remains the same as in the original main loop.
+async fn process_model(
+    model_cfg: &ModelConfig,
+    base_scraper: &ScraperImpl,
+    parser: &KleinanzeigenParser,
+    analyzer: &AnalyzerImpl,
+    storage: Arc<Mutex<SqliteStorage>>,
+    config: Arc<AppConfig>,
+    _refresh_notify: Arc<Notify>,
+    notifier: Arc<TelegramNotifier>,
+) {
+    info!("Processing model: {}", model_cfg.query);
+    let request = ScrapeRequest {
+        query: model_cfg.query.clone(),
+        category_id: model_cfg.category_id.clone(),
+    };
+
+    // Create a scraper instance for the current model (cloning the client)
+    let scraper = ScraperImpl {
+        client: base_scraper.client.clone(),
+        category_id: model_cfg.category_id.clone(),
+        min_price: model_cfg.min_price,
+        max_price: model_cfg.max_price,
+    };
+
+    // Optionally, retrieve previous stats from storage for logging
+    {
+        let storage_guard = storage.lock().await;
+        if let Ok(Some(prev_stats)) = storage_guard.get_stats(&model_cfg.query) {
+            info!(
+                "Previous stats: {:.2} € | Updated: {}",
+                prev_stats.avg_price, prev_stats.last_updated
+            );
+        }
+    }
+
+    info!("Fetching offers...");
+    // Fetch HTML page for the current request
+    let html = match scraper.fetch(&request).await {
+        Ok(html) => html,
+        Err(model::ScraperError::InvalidResponse(html)) => {
+            log_and_save_html(&html, &model_cfg.query);
+            return;
+        }
+        Err(e) => {
+            warn!("Scraper error: {:?}", e);
+            return;
+        }
+    };
+
+    info!("Parsing HTML...");
+    // Parse offers from the HTML
+    let mut offers = match parser.parse_filtered(&html, model_cfg) {
+        Ok(o) => o,
+        Err(e) => {
+            log_and_save_html(&html, &model_cfg.query);
+            warn!("Parse error: {:?}", e);
+            return;
+        }
+    };
+
+    // Normalize offers based on configuration settings
+    normalize_all(&mut offers, &config.models);
+
+    // Save offers into storage and record seen IDs
+    let mut seen_ids = HashSet::new();
+    for offer in &offers {
+        seen_ids.insert(offer.id.clone());
+        if let Err(e) = storage.lock().await.save_offer(offer) {
+            warn!("DB save error: {:?}", e);
+        }
+    }
+    let seen_vec: Vec<String> = seen_ids.into_iter().collect();
+
+    info!("Cleaning up old offers for model {}...", model_cfg.query);
+    if let Err(e) = storage
+        .lock()
+        .await
+        .delete_missing_offers_for_model(&model_cfg.query, &seen_vec)
+    {
+        warn!("Delete missing error: {:?}", e);
+    }
+
+    // Perform asynchronous extended analysis of the offers
+    info!("Performing extended asynchronous analysis...");
+    let analysis_result = analyzer.analyze_offers(&offers).await;
+    info!("Advanced Analysis Results:");
+    for (range, duration) in analysis_result.disappearance_map.iter() {
+        info!(
+            "Price Range {}-{}: Average Lifespan (s): {}",
+            range.0,
+            range.1,
+            duration.num_seconds()
+        );
+    }
+    info!("Price Change Frequency: {}", analysis_result.price_change_frequency);
+    info!("RSI: {}", analysis_result.rsi);
+
+    // Calculate basic statistics for the offers
+    let stats = analyzer.calculate_stats(&offers);
+    info!(
+        "Base Stats: avg = {:.2}, std_dev = {:.2}",
+        stats.avg_price, stats.std_dev
+    );
+
+    info!("Updating stats in storage...");
+    if let Err(e) = storage.lock().await.update_stats(&stats) {
+        warn!("Stats update failed: {:?}", e);
+    }
+
+    info!("Notifying cheapest offers...");
+    TelegramNotifier::check_and_notify_cheapest_for_model(
+        &model_cfg.query,
+        storage.clone(),
+        notifier.clone(),
+    )
+    .await;
+
+    // Find "good" offers using the analyzer's deal finding method
+    let good_offers = analyzer.find_deals(&offers, &stats, model_cfg);
+    info!("Found {} good offers", good_offers.len());
+
+    // Process each good offer and send notifications if necessary
+    for offer in good_offers {
+        info!("Checking offer: {} — {:.2} €", offer.id, offer.price);
+
+        match storage.lock().await.is_notified(&offer.id) {
+            Ok(true) => {
+                info!("Already notified: {}", offer.id);
+                continue;
+            }
+            Ok(false) => {}
+            Err(e) => {
+                warn!("Notify check failed: {:?}", e);
+                continue;
+            }
+        }
+
+        info!("Sending Telegram notification...");
+        if let Err(e) = notifier.notify(&offer).await {
+            warn!("Telegram send error: {:?}", e);
+        } else if let Err(e) = storage.lock().await.mark_notified(&offer.id) {
+            warn!("Mark notified failed: {:?}", e);
+        } else {
+            info!("Offer notified and marked.");
+        }
+    }
+
+    info!("Finished processing model: {}", model_cfg.query);
 }
 
 /// Logs and saves the provided HTML for debugging purposes.
