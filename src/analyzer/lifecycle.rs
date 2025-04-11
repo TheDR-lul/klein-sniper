@@ -1,7 +1,5 @@
-
 use crate::model::Offer;
-use crate::analyzer::market_indicators::OfferLifecycle;
-use chrono::Utc;
+use crate::model::OfferLifecycle;
 use std::collections::HashMap;
 
 pub async fn build_lifecycle_data(offers: &[Offer]) -> Vec<OfferLifecycle> {
@@ -10,24 +8,23 @@ pub async fn build_lifecycle_data(offers: &[Offer]) -> Vec<OfferLifecycle> {
     for offer in offers {
         let entry = grouped.entry(offer.id.clone()).or_insert_with(|| OfferLifecycle {
             price: offer.price,
-            first_seen: offer.timestamp,
-            last_seen: offer.timestamp,
-            price_changes: 0,
+            first_seen: offer.fetched_at,
+            last_seen: offer.fetched_at,
+            price_changes: 0.0,
         });
 
-        if offer.price != entry.price {
-            entry.price_changes += 1;
+        if (offer.price - entry.price).abs() > f64::EPSILON {
+            entry.price_changes += 1.0;
+            entry.price = offer.price;
         }
 
-        if offer.timestamp < entry.first_seen {
-            entry.first_seen = offer.timestamp;
+        if offer.fetched_at < entry.first_seen {
+            entry.first_seen = offer.fetched_at;
         }
 
-        if offer.timestamp > entry.last_seen {
-            entry.last_seen = offer.timestamp;
+        if offer.fetched_at > entry.last_seen {
+            entry.last_seen = offer.fetched_at;
         }
-
-        entry.price = offer.price;
     }
 
     grouped.into_values().collect()

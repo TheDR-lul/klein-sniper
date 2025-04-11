@@ -27,6 +27,14 @@ pub struct ModelStats {
     pub last_updated: DateTime<Utc>,
 }
 
+
+#[derive(Debug)]
+pub struct OfferLifecycle {
+    pub price: f64,
+    pub first_seen: DateTime<Utc>,
+    pub last_seen: DateTime<Utc>,
+    pub price_changes: u32,
+}
 /// Запрос для парсера
 #[derive(Debug, Clone)]
 pub struct ScrapeRequest {

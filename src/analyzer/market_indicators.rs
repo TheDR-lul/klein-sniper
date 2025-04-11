@@ -1,16 +1,9 @@
-use chrono::{DateTime, Duration, Utc};
+use chrono::Duration;
 use std::collections::HashMap;
+use crate::model::OfferLifecycle;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PriceRange(pub u32, pub u32);
-
-#[derive(Debug)]
-pub struct OfferLifecycle {
-    pub price: u32,
-    pub first_seen: DateTime<Utc>,
-    pub last_seen: DateTime<Utc>,
-    pub price_changes: u32,
-}
 
 pub struct MarketAnalyzer;
 
@@ -38,9 +31,11 @@ impl MarketAnalyzer {
         if offers.is_empty() {
             return 0.0;
         }
-        let total_changes: u32 = offers.iter().map(|o| o.price_changes).sum();
-        total_changes as f64 / offers.len() as f64
-    }
+    
+        let total_changes: f64 = offers.iter().map(|o| o.price_changes as f64).sum();
+        let freq = total_changes / offers.len() as f64;
+        (freq * 100.0).round() / 100.0
+    } 
 
     /// RSI (Relative Strength Index) для средней цены
     pub fn compute_rsi(avg_prices: &[f64]) -> f64 {
@@ -68,9 +63,10 @@ impl MarketAnalyzer {
         100.0 - (100.0 / (1.0 + rs))
     }
 
-    fn get_price_range(price: u32) -> PriceRange {
+    fn get_price_range(price: f64) -> PriceRange {
         let step = 50;
-        let lower = price / step * step;
+        let price_int = price.round() as u32;
+        let lower = price_int / step * step;
         PriceRange(lower, lower + step)
-    }
+    }    
 }
