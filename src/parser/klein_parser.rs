@@ -5,7 +5,7 @@ use chrono::Utc;
 use tracing::info;
 use std::sync::OnceLock;
 
-/// Глобальные кэшированные селекторы для оптимизации парсинга
+/// Global cached selectors for parsing optimization
 static ITEM_SELECTOR: OnceLock<Selector> = OnceLock::new();
 static TITLE_SELECTOR: OnceLock<Selector> = OnceLock::new();
 static PRICE_SELECTOR: OnceLock<Selector> = OnceLock::new();
@@ -17,12 +17,12 @@ pub struct KleinanzeigenParser;
 
 impl KleinanzeigenParser {
     pub fn new() -> Self {
-        // Инициализируем селекторы при создании парсера
+        // Initialize selectors when the parser is created
         Self::init_selectors();
         Self
     }
     
-    /// Инициализирует все селекторы один раз
+    /// Initializes all selectors once
     fn init_selectors() {
         ITEM_SELECTOR.get_or_init(|| {
             Selector::parse("li.ad-listitem").expect("Invalid item selector")

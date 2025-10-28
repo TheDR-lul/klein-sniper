@@ -47,17 +47,17 @@ impl TelegramNotifier {
         sender::send_offer(self, offer).await
     }
 
-    /// Запускает бота для прослушивания команд в отдельной задаче
+    /// Start bot to listen for commands in separate task
     pub fn spawn_listener(notifier: Arc<TelegramNotifier>) {
         tokio::spawn(async move {
             tracing::info!("▶️ Starting Telegram listener...");
             
-            // Устанавливаем команды меню бота
+            // Set bot menu commands
             if let Err(e) = notifier.set_my_commands().await {
                 tracing::warn!("Failed to set bot commands: {:?}", e);
             }
             
-            // Запускаем обработчик команд
+            // Start command handler
             command_handler::run_bot(notifier).await;
             
             tracing::info!("🛑 Telegram listener ended.");

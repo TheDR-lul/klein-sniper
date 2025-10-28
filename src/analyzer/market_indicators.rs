@@ -13,7 +13,7 @@ pub struct MarketAnalyzer;
 
 impl MarketAnalyzer {
     /// Default step size for the price range (50 units).
-    const DEFAULT_STEP: u32 = 50;
+    pub const DEFAULT_STEP: u32 = 50;
 
     /// Calculates the average lifespan (disappearance speed) of offers for each price range.
     pub fn disappearance_speed(offers: &[OfferLifecycle]) -> HashMap<PriceRange, Duration> {

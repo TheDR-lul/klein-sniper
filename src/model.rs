@@ -42,55 +42,55 @@ pub struct ScrapeRequest {
     pub category_id: String,
 }
 
-/// Ошибки, возникающие при загрузке страниц
+/// Errors that can occur during page fetching
 #[derive(Debug, Error)]
 pub enum ScraperError {
-    #[error("🌐 HTTP ошибка: {0}")]
+    #[error("🌐 HTTP error: {0}")]
     HttpError(String),
     
-    #[error("❌ Некорректный ответ сервера: {0}")]
+    #[error("❌ Invalid server response: {0}")]
     InvalidResponse(String),
     
-    #[error("📄 Ошибка парсинга HTML: {0}")]
+    #[error("📄 HTML parsing error: {0}")]
     HtmlParseError(String),
 }
 
-/// Ошибки, возникающие при разборе HTML
+/// Errors that can occur during HTML parsing
 #[derive(Debug, Error)]
 pub enum ParserError {
-    #[error("📄 Ошибка парсинга HTML: {0}")]
+    #[error("📄 HTML parsing error: {0}")]
     HtmlParseError(String),
     
-    #[error("🔍 Отсутствующее поле: {0}")]
+    #[error("🔍 Missing field: {0}")]
     MissingField(String),
 }
 
-/// Ошибки, связанные с хранилищем (БД)
+/// Errors related to storage (DB)
 #[derive(Debug, Error)]
 pub enum StorageError {
-    #[error("❌ Ошибка базы данных: {0}")]
+    #[error("❌ Database error: {0}")]
     DatabaseError(String),
 
-    #[error("🔍 Не найдено")]
+    #[error("🔍 Not found")]
     NotFound,
 
-    #[error("📅 Ошибка парсинга даты: {0}")]
+    #[error("📅 Date parsing error: {0}")]
     ParseError(#[from] ParseError),
 }
 
-// Автоматическое преобразование rusqlite::Error в StorageError
+// Automatic conversion from rusqlite::Error to StorageError
 impl From<rusqlite::Error> for StorageError {
     fn from(err: rusqlite::Error) -> Self {
         StorageError::DatabaseError(err.to_string())
     }
 }
 
-/// Ошибки при уведомлениях (например, Telegram)
+/// Errors during notifications (e.g., Telegram)
 #[derive(Debug, Error)]
 pub enum NotifyError {
-    #[error("📡 Ошибка API: {0}")]
+    #[error("📡 API error: {0}")]
     ApiError(String),
     
-    #[error("🔌 Сервис недоступен")]
+    #[error("🔌 Service unreachable")]
     Unreachable,
 }

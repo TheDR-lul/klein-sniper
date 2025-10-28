@@ -21,7 +21,7 @@ teloxide = { version = "0.14", features = ["macros", "ctrlc_handler"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["timeout"] }
 governor = "0.7"
-backoff = "0.4"
+backoff = { version = "0.4", features = ["tokio"] }
 
 [build-dependencies]
 winres = "0.1"

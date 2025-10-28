@@ -1,4 +1,4 @@
-use crate::model::{Offer, ModelStats, OfferLifecycle};
+use crate::model::{Offer, ModelStats};
 use crate::config::ModelConfig;
 use chrono::Utc;
 use crate::analyzer::market_indicators::{MarketAnalyzer, PriceRange};
@@ -16,6 +16,7 @@ pub trait Analyzer {
         stats: &ModelStats,
         cfg: &ModelConfig,
         analysis: &AnalysisResult,
+        volatility_threshold: f64,
     ) -> Vec<Offer>;
 }
 

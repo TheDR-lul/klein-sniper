@@ -149,12 +149,12 @@ pub struct StatisticsSnapshot {
 }
 
 impl StatisticsSnapshot {
-    /// Экспорт в JSON
+    /// Export to JSON
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(self)
     }
     
-    /// Экспорт в CSV (простой формат)
+    /// Export to CSV (simple format)
     pub fn to_csv(&self) -> String {
         format!(
             "metric,value\n\

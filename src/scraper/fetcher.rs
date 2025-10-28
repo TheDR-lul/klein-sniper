@@ -18,7 +18,7 @@ pub struct ScraperImpl {
     pub max_pages: usize,
     pub delay_seconds: u64,
     pub max_retries: u32,
-    rate_limiter: Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
+    pub(crate) rate_limiter: Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
 }
 
 impl ScraperImpl {
@@ -122,12 +122,7 @@ impl ScraperImpl {
             }
         };
         
-        retry(backoff, operation)
-            .await
-            .map_err(|e| match e {
-                backoff::Error::Permanent(err) => err,
-                backoff::Error::Transient { err, .. } => err,
-            })
+        retry(backoff, operation).await
     }
     
     /// Single fetch attempt without retry

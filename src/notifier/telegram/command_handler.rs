@@ -4,43 +4,44 @@ use teloxide::prelude::*;
 use teloxide::utils::command::BotCommands;
 use tracing::{info, warn};
 
-/// Определение команд бота
-#[derive(BotCommands, Clone)]
-#[command(rename_rule = "lowercase", description = "Доступные команды:")]
+/// Bot command definitions
+#[derive(BotCommands, Clone, Debug)]
+#[command(rename_rule = "lowercase", description = "Available commands:")]
 pub enum Command {
-    #[command(description = "проверка соединения")]
+    #[command(description = "check connection")]
     Ping,
-    #[command(description = "статус анализатора")]
+    #[command(description = "analyzer status")]
     Status,
-    #[command(description = "список команд")]
+    #[command(description = "command list")]
     Help,
-    #[command(description = "последняя выгодная сделка")]
+    #[command(description = "last great deal")]
     Last,
-    #[command(description = "топ-5 офферов")]
+    #[command(description = "top-5 offers")]
     Top5,
-    #[command(description = "средние цены")]
+    #[command(description = "average prices")]
     Avg,
-    #[command(description = "текущая конфигурация")]
+    #[command(description = "current configuration")]
     Config,
-    #[command(description = "ручной перезапуск")]
+    #[command(description = "manual restart")]
     Refresh,
-    #[command(description = "время работы сервиса")]
+    #[command(description = "service uptime")]
     Uptime,
-    #[command(description = "принудительная отправка")]
+    #[command(description = "force send notification")]
     ForceNotify,
-    #[command(description = "статистика базы данных")]
+    #[command(description = "database statistics")]
     DbStats,
 }
 
-/// Запускает бота и обрабатывает команды
+/// Start bot and handle commands
 pub async fn run_bot(notifier: Arc<TelegramNotifier>) {
+    let notifier_clone = notifier.clone();
     let handler = Update::filter_message()
         .filter_command::<Command>()
         .endpoint(move |bot: Bot, msg: Message, cmd: Command| {
-            let notifier = notifier.clone();
+            let notifier = notifier_clone.clone();
             async move {
                 handle_command(bot, msg, cmd, notifier).await;
-                Ok(())
+                Result::<(), ()>::Ok(())
             }
         });
 
@@ -51,7 +52,7 @@ pub async fn run_bot(notifier: Arc<TelegramNotifier>) {
         .await;
 }
 
-/// Обработчик команд
+/// Command handler
 async fn handle_command(
     bot: Bot,
     msg: Message,
@@ -64,10 +65,10 @@ async fn handle_command(
 
     let response = match cmd {
         Command::Ping => {
-            "✅ Я онлайн!".to_string()
+            "✅ I'm online!".to_string()
         }
         Command::Status => {
-            "📊 Анализатор работает. Ожидание следующей проверки.".to_string()
+            "📊 Analyzer is running. Waiting for next check.".to_string()
         }
         Command::Help => {
             Command::descriptions().to_string()
@@ -75,12 +76,12 @@ async fn handle_command(
         Command::Refresh => {
             info!("/refresh command received, triggering refresh...");
             notifier.refresh_notify.notify_one();
-            "🔄 Принудительный перезапуск инициирован.".to_string()
+            "🔄 Manual refresh initiated.".to_string()
         }
         Command::Uptime => {
             let uptime = notifier.start_time.elapsed();
             format!(
-                "⏱ Время работы: {:02}:{:02}:{:02}",
+                "⏱ Uptime: {:02}:{:02}:{:02}",
                 uptime.as_secs() / 3600,
                 (uptime.as_secs() % 3600) / 60,
                 uptime.as_secs() % 60
@@ -90,21 +91,21 @@ async fn handle_command(
             match notifier.storage.lock().await.get_last_offer() {
                 Ok(Some(offer)) => {
                     format!(
-                        "🕵️ Последний оффер:\n📦 {}\n💰 {:.2} €\n📍 {}\n🔗 {}",
+                        "🕵️ Last offer:\n📦 {}\n💰 {:.2} €\n📍 {}\n🔗 {}",
                         offer.title, offer.price, offer.location, offer.link
                     )
                 }
-                Ok(None) => "📭 Нет офферов в базе данных.".to_string(),
+                Ok(None) => "📭 No offers in database.".to_string(),
                 Err(e) => {
                     warn!("/last error: {:?}", e);
-                    format!("❌ Ошибка: {:?}", e)
+                    format!("❌ Error: {:?}", e)
                 }
             }
         }
         Command::Top5 => {
             match notifier.storage.lock().await.get_top5_offers() {
                 Ok(offers) if !offers.is_empty() => {
-                    let mut msg = String::from("🏆 Топ-5 лучших офферов:\n");
+                    let mut msg = String::from("🏆 Top-5 best offers:\n");
                     for (i, offer) in offers.iter().enumerate() {
                         msg.push_str(&format!(
                             "{}. {} — {:.2} €\n📍 {}\n🔗 {}\n\n",
@@ -117,34 +118,34 @@ async fn handle_command(
                     }
                     msg
                 }
-                Ok(_) => "📭 Нет офферов в базе данных.".to_string(),
+                Ok(_) => "📭 No offers in database.".to_string(),
                 Err(e) => {
                     warn!("/top5 error: {:?}", e);
-                    format!("❌ Ошибка: {:?}", e)
+                    format!("❌ Error: {:?}", e)
                 }
             }
         }
         Command::Avg => {
             match notifier.storage.lock().await.get_average_prices() {
                 Ok(prices) if !prices.is_empty() => {
-                    let mut msg = String::from("📊 Средние цены по моделям:\n");
+                    let mut msg = String::from("📊 Average prices by model:\n");
                     for (model, price) in prices {
                         msg.push_str(&format!("🔹 {} — {:.2} €\n", model, price));
                     }
                     msg
                 }
-                Ok(_) => "📭 Нет статистики по моделям.".to_string(),
+                Ok(_) => "📭 No model statistics available.".to_string(),
                 Err(e) => {
                     warn!("/avg error: {:?}", e);
-                    format!("❌ Ошибка: {:?}", e)
+                    format!("❌ Error: {:?}", e)
                 }
             }
         }
         Command::Config => {
             if notifier.config.models.is_empty() {
-                "⚠️ Не загружено ни одной модели в конфигурации.".to_string()
+                "⚠️ No models loaded in configuration.".to_string()
             } else {
-                let mut msg = String::from("⚙️ Загруженные модели:\n");
+                let mut msg = String::from("⚙️ Loaded models:\n");
                 for model in &notifier.config.models {
                     msg.push_str(&format!("🔸 {} [{}]\n", model.query, model.category_id));
                 }
@@ -157,11 +158,11 @@ async fn handle_command(
                     match notifier.notify(&offer).await {
                         Ok(_) => {
                             let _ = notifier.storage.lock().await.mark_notified(&offer.id);
-                            "✅ Уведомление отправлено!".to_string()
+                            "✅ Notification sent!".to_string()
                         }
                         Err(e) => {
                             warn!("/force_notify send error: {:?}", e);
-                            format!("❌ Ошибка отправки: {:?}", e)
+                            format!("❌ Send error: {:?}", e)
                         }
                     }
                 }
