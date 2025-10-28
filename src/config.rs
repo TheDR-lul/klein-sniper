@@ -10,6 +10,14 @@ pub struct ModelConfig {
     pub min_price: f64,
     pub max_price: f64,
     pub match_keywords: Vec<String>,
+    
+    /// Keywords that must NOT be present in title (for filtering out unwanted items)
+    #[serde(default)]
+    pub exclude_keywords: Vec<String>,
+    
+    /// Require ALL match_keywords to be present (default: false = any keyword)
+    #[serde(default)]
+    pub require_all_keywords: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -75,12 +83,47 @@ pub struct DatabaseConfig {
     pub auto_cleanup_on_startup: bool,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct NotificationConfig {
+    /// Quiet hours start (e.g. 23 = 11 PM)
+    #[serde(default = "default_quiet_start")]
+    pub quiet_hours_start: u32,
+    
+    /// Quiet hours end (e.g. 7 = 7 AM)
+    #[serde(default = "default_quiet_end")]
+    pub quiet_hours_end: u32,
+    
+    /// Batch notifications (send all in one message)
+    #[serde(default = "default_batch_notifications")]
+    pub batch_notifications: bool,
+    
+    /// Track price history
+    #[serde(default = "default_track_price_history")]
+    pub track_price_history: bool,
+    
+    /// Max distance in km (0 = unlimited)
+    #[serde(default)]
+    pub max_distance_km: f64,
+}
+
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
             offer_retention_days: default_offer_retention_days(),
             stats_retention_days: default_stats_retention_days(),
             auto_cleanup_on_startup: default_auto_cleanup(),
+        }
+    }
+}
+
+impl Default for NotificationConfig {
+    fn default() -> Self {
+        Self {
+            quiet_hours_start: default_quiet_start(),
+            quiet_hours_end: default_quiet_end(),
+            batch_notifications: default_batch_notifications(),
+            track_price_history: default_track_price_history(),
+            max_distance_km: 0.0,
         }
     }
 }
@@ -100,6 +143,9 @@ pub struct AppConfig {
     
     #[serde(default)]
     pub database: DatabaseConfig,
+    
+    #[serde(default)]
+    pub notifications: NotificationConfig,
 }
 
 // Default value functions
@@ -112,6 +158,10 @@ fn default_requests_per_minute() -> u32 { 30 }
 fn default_offer_retention_days() -> u32 { 30 }
 fn default_stats_retention_days() -> u32 { 90 }
 fn default_auto_cleanup() -> bool { true }
+fn default_quiet_start() -> u32 { 23 }
+fn default_quiet_end() -> u32 { 7 }
+fn default_batch_notifications() -> bool { true }
+fn default_track_price_history() -> bool { true }
 
 fn default_user_agents() -> Vec<String> {
     vec![

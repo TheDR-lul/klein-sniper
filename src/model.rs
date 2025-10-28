@@ -16,7 +16,16 @@ pub struct Offer {
     pub fetched_at: DateTime<Utc>,
     pub user_id: Option<String>,     
     pub user_name: Option<String>,   
-    pub user_url: Option<String>,    
+    pub user_url: Option<String>,
+    pub user_member_since: Option<String>, // "Mitglied seit 2020" etc.
+}
+
+/// Seller risk assessment
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SellerRisk {
+    Low,       // Trusted seller (old account, few offers)
+    Medium,    // Normal seller
+    High,      // Suspicious (new account, many offers)
 }
 /// Статистика по модели (для анализа отклонений)
 #[derive(Debug, Clone)]

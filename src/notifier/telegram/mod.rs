@@ -71,13 +71,21 @@ impl TelegramNotifier {
             BotCommand::new("ping", "Check connection"),
             BotCommand::new("status", "Show analyzer status"),
             BotCommand::new("help", "Command list"),
+            BotCommand::new("settings", "Show settings"),
             BotCommand::new("last", "Show last great offer"),
             BotCommand::new("top5", "Top 5 offers"),
             BotCommand::new("avg", "Average price"),
             BotCommand::new("config", "Current configuration"),
             BotCommand::new("refresh", "Manual restart"),
             BotCommand::new("uptime", "Service uptime"),
-        ];
+            BotCommand::new("dbstats", "Database stats"),
+                BotCommand::new("cleardb", "Clear all data"),
+                BotCommand::new("minscore", "Set min score"),
+                BotCommand::new("maxdist", "Set max distance"),
+                BotCommand::new("besttimes", "Best times to check"),
+                BotCommand::new("profit", "Profit calculator"),
+                BotCommand::new("market", "Market analysis"),
+            ];
         
         self.bot.set_my_commands(commands).await?;
         Ok(())

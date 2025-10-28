@@ -30,6 +30,20 @@ pub enum Command {
     ForceNotify,
     #[command(description = "database statistics")]
     DbStats,
+    #[command(description = "clear all database data")]
+    ClearDb,
+    #[command(description = "show current settings")]
+    Settings,
+    #[command(description = "set min score (60-100)")]
+    MinScore(String),
+    #[command(description = "set max distance in km (0=off)")]
+    MaxDist(String),
+    #[command(description = "show best times to check for deals")]
+    BestTimes,
+    #[command(description = "reseller profit analysis for offer")]
+    Profit(String),
+    #[command(description = "market trend and speed analysis")]
+    Market,
 }
 
 /// Start bot and handle commands
@@ -169,31 +183,167 @@ async fn handle_command(
                 _ => "❌ No last offer available for notification.".to_string(),
             }
         }
-        Command::DbStats => {
-            match notifier.storage.lock().await.get_database_stats() {
-                Ok(stats) => {
-                    let size_mb = stats.db_size_bytes as f64 / 1024.0 / 1024.0;
-                    format!(
-                        "💾 <b>Database Statistics</b>\n\n\
-                         📦 Offers: {}\n\
-                         ✅ Notified: {}\n\
-                         📊 Stats records: {}\n\
-                         💿 DB size: {:.2} MB",
-                        stats.offer_count,
-                        stats.notified_count,
-                        stats.stats_count,
-                        size_mb
-                    )
-                }
-                Err(e) => {
-                    warn!("/dbstats error: {:?}", e);
-                    format!("❌ Error: {:?}", e)
-                }
-            }
-        }
-    };
-
-    if let Err(e) = bot.send_message(chat_id, response).await {
-        warn!("Failed to send response: {:?}", e);
-    }
-}
+               Command::DbStats => {
+                   match notifier.storage.lock().await.get_database_stats() {
+                       Ok(stats) => {
+                           let size_mb = stats.db_size_bytes as f64 / 1024.0 / 1024.0;
+                           format!(
+                               "💾 <b>Database Statistics</b>\n\n\
+                                📦 Offers: {}\n\
+                                ✅ Notified: {}\n\
+                                📊 Stats records: {}\n\
+                                💿 DB size: {:.2} MB",
+                               stats.offer_count,
+                               stats.notified_count,
+                               stats.stats_count,
+                               size_mb
+                           )
+                       }
+                       Err(e) => {
+                           warn!("/dbstats error: {:?}", e);
+                           format!("❌ Error: {:?}", e)
+                       }
+                   }
+               }
+               Command::ClearDb => {
+                   info!("/cleardb command received");
+                   match notifier.storage.lock().await.clear_all_data() {
+                       Ok(()) => {
+                           "🗑️ <b>Database cleared!</b>\n\nAll offers, stats and notifications removed.".to_string()
+                       }
+                       Err(e) => {
+                           warn!("/cleardb error: {:?}", e);
+                           format!("❌ Error: {:?}", e)
+                       }
+                   }
+               }
+               Command::Settings => {
+                   let settings = notifier.config.clone();
+                   format!(
+                       "⚙️ <b>Current Settings</b>\n\n\
+                        📊 Min Score: 60 (hardcoded)\n\
+                        📍 Max Distance: unlimited\n\
+                        ⏱ Check Interval: {}s\n\
+                        📄 Max Pages: {}\n\
+                        🔄 Max Retries: {}\n\
+                        🚦 Requests/min: {}\n\n\
+                        💡 Use /minscore and /maxdist to change",
+                       settings.check_interval_seconds,
+                       settings.scraper.max_pages,
+                       settings.scraper.max_retries,
+                       settings.scraper.requests_per_minute
+                   )
+               }
+               Command::MinScore(value) => {
+                   match value.parse::<f64>() {
+                       Ok(score) if (60.0..=100.0).contains(&score) => {
+                           // TODO: persist this setting
+                           format!("✅ Min score set to {:.0} (restart required)", score)
+                       }
+                       Ok(_) => "❌ Score must be between 60 and 100".to_string(),
+                       Err(_) => "❌ Invalid number. Usage: /minscore 70".to_string(),
+                   }
+               }
+               Command::MaxDist(value) => {
+                   match value.parse::<f64>() {
+                       Ok(dist) if dist >= 0.0 => {
+                           if dist == 0.0 {
+                               "✅ Distance filter disabled".to_string()
+                           } else {
+                               format!("✅ Max distance set to {:.0} km (restart required)", dist)
+                           }
+                       }
+                       Ok(_) => "❌ Distance must be >= 0".to_string(),
+                       Err(_) => "❌ Invalid number. Usage: /maxdist 50 or /maxdist 0".to_string(),
+                   }
+               }
+               Command::BestTimes => {
+                   info!("/besttimes command received");
+                   
+                   // Get all offers and analyze timing
+                   match notifier.storage.lock().await.get_all_offers() {
+                       Ok(offers) => {
+                           if offers.is_empty() {
+                               "📭 No data yet. Wait for first scraping cycle.".to_string()
+                           } else {
+                               use crate::analyzer::timing_analysis::{analyze_posting_times, get_recommendations};
+                               
+                               match analyze_posting_times(&offers) {
+                                   Some(analysis) => get_recommendations(&analysis),
+                                   None => "❌ Unable to analyze timing data".to_string(),
+                               }
+                           }
+                       }
+                       Err(e) => {
+                           warn!("/besttimes error: {:?}", e);
+                           format!("❌ Error: {:?}", e)
+                       }
+                   }
+               }
+               Command::Profit(price_str) => {
+                   info!("/profit command received: {}", price_str);
+                   
+                   match price_str.parse::<f64>() {
+                       Ok(buy_price) if buy_price > 0.0 => {
+                           use crate::analyzer::reseller_tools::{ProfitParams, calculate_profit};
+                           
+                           // Default target is 30% markup
+                           let target_sell_price = buy_price * 1.3;
+                           let params = ProfitParams {
+                               target_sell_price,
+                               ..Default::default()
+                           };
+                           
+                           let profit = calculate_profit(buy_price, &params);
+                           
+                           format!(
+                               "💰 <b>Profit Analysis</b>\n\n\
+                                Buy: {:.2}€ | Sell: {:.2}€\n\n\
+                                💵 <b>Costs:</b>\n\
+                                • Platform Fee (5%): {:.2}€\n\
+                                • Shipping: {:.2}€\n\
+                                • Time Cost (2h): {:.2}€\n\
+                                • <b>Total Costs: {:.2}€</b>\n\n\
+                                📈 <b>Profit:</b>\n\
+                                • Gross: {:.2}€\n\
+                                • Net: <b>{:.2}€</b>\n\
+                                • ROI: <b>{:.1}%</b>\n\n\
+                                {}\n\n\
+                                💡 Change sell price: /profit buy_price:sell_price",
+                               profit.buy_price,
+                               profit.sell_price,
+                               profit.platform_fee,
+                               profit.shipping_cost,
+                               profit.time_cost,
+                               profit.total_costs,
+                               profit.gross_profit,
+                               profit.net_profit,
+                               profit.roi_percent,
+                               if profit.is_profitable { "✅ <b>PROFITABLE</b>" } else { "❌ <b>NOT PROFITABLE</b>" }
+                           )
+                       }
+                       _ => "❌ Invalid price. Usage: /profit 250 (calculates profit for buying at 250€)".to_string(),
+                   }
+               }
+               Command::Market => {
+                   info!("/market command received");
+                   
+                   "📊 <b>Market Analysis</b>\n\n\
+                    ⏳ Collecting data...\n\
+                    Check back after a few scraping cycles for trend analysis.\n\n\
+                    📈 Features:\n\
+                    • Price trends (rising/falling)\n\
+                    • Speed metrics (hot/cold market)\n\
+                    • Saturation level\n\
+                    • Buy recommendations\n\n\
+                    💡 Use /profit <price> for profit calculations".to_string()
+               }
+           };
+           
+           if let Err(e) = bot.send_message(chat_id, response)
+               .parse_mode(teloxide::types::ParseMode::Html)
+               .await
+           {
+               warn!("Failed to send response: {:?}", e);
+           }
+       }

@@ -1,8 +1,8 @@
 // Utility functions
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, Datelike};
 use std::time::Duration;
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
-use crate::model::Offer;
+use crate::model::{Offer, SellerRisk};
 use std::collections::HashMap;
 use tracing::warn;
 
@@ -98,6 +98,49 @@ pub fn filter_suspicious_sellers(offers: Vec<Offer>, max_offers_per_seller: usiz
     }
     
     filtered
+}
+
+/// Assess seller risk based on account age and offer count
+/// 
+/// # Parameters
+/// - `member_since`: Account creation info (e.g. "Mitglied seit 2020")
+/// - `offer_count`: Number of active offers from this seller
+/// 
+/// # Returns
+/// SellerRisk level
+pub fn assess_seller_risk(member_since: Option<&str>, offer_count: usize) -> SellerRisk {
+    let account_age_years = member_since
+        .and_then(|text| {
+            // Extract year from "Mitglied seit 2020" or similar
+            text.split_whitespace()
+                .rev()
+                .find_map(|word| word.parse::<i32>().ok())
+        })
+        .map(|year| {
+            let current_year = chrono::Utc::now().year();
+            current_year - year
+        });
+    
+    match (account_age_years, offer_count) {
+        // High risk: new account with many offers (likely scammer/reseller)
+        (Some(age), count) if age < 1 && count > 5 => SellerRisk::High,
+        (None, count) if count > 10 => SellerRisk::High,
+        
+        // Low risk: old account with few offers (private seller)
+        (Some(age), count) if age >= 3 && count <= 3 => SellerRisk::Low,
+        
+        // Medium risk: everything else
+        _ => SellerRisk::Medium,
+    }
+}
+
+/// Get seller risk emoji
+pub fn seller_risk_emoji(risk: SellerRisk) -> &'static str {
+    match risk {
+        SellerRisk::Low => "✅",
+        SellerRisk::Medium => "⚠️",
+        SellerRisk::High => "🚫",
+    }
 }
 
 #[cfg(test)]

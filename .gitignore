@@ -21,15 +21,28 @@ Thumbs.db
 
 # Logs
 *.log
+logs/
+debug.log
+test_run.log
+scoring_test.log
 
-# Config
+# Config & Database
 config.json
 data.db
+data.db-shm
+data.db-wal
 
 # Cargo
 Cargo.lock
 
-# Documentation and reports
+# Documentation and reports (generated)
 docs/
+AUDIT_REPORT.md
+TODO.md
+ARCHITECTURE.md
+
+# Temporary test files
+test_*.html
+debug-*.html
 
 # Counter

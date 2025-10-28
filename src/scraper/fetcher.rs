@@ -43,10 +43,12 @@ impl ScraperImpl {
         let client = Client::builder()
             .user_agent(random_user_agent.as_str())
             .timeout(Duration::from_secs(30))
+            .gzip(true)  // Enable automatic gzip decompression
+            .brotli(true) // Enable brotli decompression
+            .deflate(true) // Enable deflate decompression
             .default_headers({
                 let mut headers = header::HeaderMap::new();
                 headers.insert(header::ACCEPT_LANGUAGE, "en-US,en;q=0.9".parse().unwrap());
-                headers.insert(header::ACCEPT_ENCODING, "gzip, deflate, br".parse().unwrap());
                 headers
             })
             .build()
@@ -173,6 +175,10 @@ impl Scraper for ScraperImpl {
                     return Err(e);
                 }
             };
+            
+            // Debug: log HTML snippet to diagnose parsing issues (safely)
+            let html_preview: String = html.chars().take(500).collect();
+            info!("HTML preview (first 500 chars): {}", html_preview);
 
             let doc = Html::parse_document(&html);
             let items: Vec<_> = doc.select(&item_selector).collect();
@@ -180,6 +186,7 @@ impl Scraper for ScraperImpl {
 
             if items.is_empty() {
                 info!("No items found on page {}, stopping.", page);
+                warn!("HTML length: {} bytes, selectors may be outdated", html.len());
                 break;
             }
 

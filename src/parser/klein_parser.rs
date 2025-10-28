@@ -95,7 +95,26 @@ impl KleinanzeigenParser {
             }
 
             let title_lower = title.to_lowercase();
-            if !cfg.match_keywords.iter().any(|kw| title_lower.contains(&kw.to_lowercase())) {
+            
+            // Check exclude keywords first (blacklist)
+            let has_excluded = cfg.exclude_keywords.iter()
+                .any(|kw| title_lower.contains(&kw.to_lowercase()));
+            if has_excluded {
+                continue;
+            }
+            
+            // Check match keywords (whitelist)
+            let keyword_match = if cfg.require_all_keywords {
+                // Require ALL keywords to be present
+                cfg.match_keywords.iter()
+                    .all(|kw| title_lower.contains(&kw.to_lowercase()))
+            } else {
+                // Require at least ONE keyword
+                cfg.match_keywords.iter()
+                    .any(|kw| title_lower.contains(&kw.to_lowercase()))
+            };
+            
+            if !keyword_match {
                 continue;
             }
 
@@ -116,6 +135,18 @@ impl KleinanzeigenParser {
                 .last()
                 .map(|n| n.text().collect::<String>().trim().to_string());
 
+            // Try to extract "Mitglied seit" info
+            let user_member_since = element
+                .select(&Selector::parse("div.aditem-main--bottom span").unwrap())
+                .find_map(|n| {
+                    let text = n.text().collect::<String>();
+                    if text.contains("Mitglied seit") || text.contains("Member since") {
+                        Some(text.trim().to_string())
+                    } else {
+                        None
+                    }
+                });
+
             let offer = Offer {
                 id,
                 title,
@@ -129,6 +160,7 @@ impl KleinanzeigenParser {
                 user_id: None,
                 user_name,
                 user_url: None,
+                user_member_since,
             };
 
             offers.push(offer);

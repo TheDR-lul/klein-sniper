@@ -1,6 +1,6 @@
 use crate::model::{ModelStats, Offer, StorageError};
 use chrono::{DateTime, Duration, Utc, NaiveDateTime, TimeZone};
-use rusqlite::{params, Connection, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::collections::HashMap;
 use tracing::info;
 
@@ -42,23 +42,33 @@ impl SqliteStorage {
                 std_dev REAL NOT NULL,
                 last_updated TEXT NOT NULL
             );
-            
-            -- Create indexes for query optimization
-            CREATE INDEX IF NOT EXISTS idx_offers_model ON offers(model);
+               
+               CREATE TABLE IF NOT EXISTS price_history (
+                   offer_id TEXT NOT NULL,
+                   price REAL NOT NULL,
+                   recorded_at TEXT NOT NULL,
+                   FOREIGN KEY (offer_id) REFERENCES offers(id)
+               );
+               
+               -- Create indexes for query optimization
+               CREATE INDEX IF NOT EXISTS idx_offers_model ON offers(model);
             CREATE INDEX IF NOT EXISTS idx_offers_price ON offers(price);
             CREATE INDEX IF NOT EXISTS idx_offers_fetched_at ON offers(fetched_at);
-            CREATE INDEX IF NOT EXISTS idx_offers_model_price ON offers(model, price);
-            CREATE INDEX IF NOT EXISTS idx_notified_at ON notified(notified_at);
+               CREATE INDEX IF NOT EXISTS idx_offers_model_price ON offers(model, price);
+               CREATE INDEX IF NOT EXISTS idx_notified_at ON notified(notified_at);
+               CREATE INDEX IF NOT EXISTS idx_price_history_offer ON price_history(offer_id);
+               CREATE INDEX IF NOT EXISTS idx_price_history_time ON price_history(recorded_at);
             "
         )?;
 
         // Auto-migrations for offers table: ensure all required columns exist
         Self::migrate_add_column_if_missing(&conn, "offers", "location", "TEXT NOT NULL DEFAULT ''")?;
         Self::migrate_add_column_if_missing(&conn, "offers", "description", "TEXT NOT NULL DEFAULT ''")?;
-        // Add user fields used in save_offer and queries
+               // Add user fields used in save_offer and queries
         Self::migrate_add_column_if_missing(&conn, "offers", "user_id", "TEXT")?;
         Self::migrate_add_column_if_missing(&conn, "offers", "user_name", "TEXT")?;
         Self::migrate_add_column_if_missing(&conn, "offers", "user_url", "TEXT")?;
+               Self::migrate_add_column_if_missing(&conn, "offers", "user_member_since", "TEXT")?;
 
         Ok(Self { conn })
     }
@@ -89,9 +99,9 @@ impl SqliteStorage {
             "INSERT OR REPLACE INTO offers (
                 id, title, price, model, link, 
                 posted_at, fetched_at, location, description,
-                user_id, user_name, user_url
+                user_id, user_name, user_url, user_member_since
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 &offer.id,
                 &offer.title,
@@ -105,6 +115,7 @@ impl SqliteStorage {
                 &offer.user_id,
                 &offer.user_name,
                 &offer.user_url,
+                &offer.user_member_since,
             ],
         )?;
         Ok(())
@@ -134,7 +145,7 @@ impl SqliteStorage {
     /// Find probable reposts for specified model based on price proximity (< 10.0)
     pub fn find_probable_reposts_for_model(&self, model: &str) -> Result<Vec<Offer>, StorageError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, price, model, link, posted_at, fetched_at, location, description, user_id, user_name, user_url 
+            "SELECT id, title, price, model, link, posted_at, fetched_at, location, description, user_id, user_name, user_url, user_member_since 
              FROM offers WHERE model = ?1 AND user_id IS NOT NULL ORDER BY fetched_at DESC",
         )?;
 
@@ -175,6 +186,13 @@ impl SqliteStorage {
         params_vec.extend(current_ids.iter().cloned());
         stmt.execute(rusqlite::params_from_iter(params_vec))?;
         Ok(())
+    }
+
+    /// Check if offer exists in database
+    pub fn offer_exists(&self, offer_id: &str) -> Result<bool, StorageError> {
+        let mut stmt = self.conn.prepare("SELECT 1 FROM offers WHERE id = ?1")?;
+        let mut rows = stmt.query(params![offer_id])?;
+        Ok(rows.next()?.is_some())
     }
 
     /// Check if offer was already notified
@@ -258,7 +276,7 @@ impl SqliteStorage {
     pub fn get_last_offer(&self) -> Result<Option<Offer>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, title, price, model, link, posted_at, fetched_at, location, description,
-                    user_id, user_name, user_url
+                    user_id, user_name, user_url, user_member_since
              FROM offers ORDER BY fetched_at DESC LIMIT 1",
         )?;
 
@@ -275,7 +293,7 @@ impl SqliteStorage {
     pub fn get_top5_offers(&self) -> Result<Vec<Offer>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, title, price, model, link, posted_at, fetched_at, location, description,
-                    user_id, user_name, user_url
+                    user_id, user_name, user_url, user_member_since
              FROM offers WHERE price > 0 ORDER BY price ASC LIMIT 5",
         )?;
 
@@ -292,7 +310,7 @@ impl SqliteStorage {
     pub fn get_all_offers(&self) -> Result<Vec<Offer>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, title, price, model, link, posted_at, fetched_at, location, description,
-                    user_id, user_name, user_url
+                    user_id, user_name, user_url, user_member_since
              FROM offers",
         )?;
 
@@ -337,10 +355,10 @@ impl SqliteStorage {
             rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(e))
         })?;
 
-        let (user_id, user_name, user_url) = if full {
-            (row.get(9)?, row.get(10)?, row.get(11)?)
+            let (user_id, user_name, user_url, user_member_since) = if full {
+                (row.get(9)?, row.get(10)?, row.get(11)?, row.get(12)?)
         } else {
-            (None, None, None)
+                (None, None, None, None)
         };
 
         Ok(Offer {
@@ -356,7 +374,8 @@ impl SqliteStorage {
             user_id,
             user_name,
             user_url,
-        })
+                user_member_since,
+            })
     }
     
     /// Clean up old offers based on retention period
@@ -466,6 +485,121 @@ impl SqliteStorage {
             stats_count: stats_count as usize,
             db_size_bytes: db_size as usize,
         })
+    }
+    
+    /// Clear all data from database (nuclear option)
+    pub fn clear_all_data(&self) -> Result<(), StorageError> {
+        info!("🗑️ Clearing ALL database data...");
+        
+        self.conn.execute("DELETE FROM offers", [])?;
+        self.conn.execute("DELETE FROM notified", [])?;
+        self.conn.execute("DELETE FROM model_stats", [])?;
+        self.conn.execute("DELETE FROM price_history", [])?;
+        
+        // VACUUM to reclaim space
+        self.conn.execute("VACUUM", [])?;
+        
+        info!("✅ All data cleared and database vacuumed");
+        Ok(())
+    }
+    
+    /// Track price change for an offer
+    pub fn track_price_change(&self, offer_id: &str, new_price: f64, old_price: f64) -> Result<(), StorageError> {
+        if (new_price - old_price).abs() > 0.01 {
+            self.conn.execute(
+                "INSERT INTO price_history (offer_id, price, recorded_at) VALUES (?1, ?2, datetime('now'))",
+                params![offer_id, new_price],
+            )?;
+            info!("💰 Price change tracked: {} | {:.2}€ → {:.2}€", offer_id, old_price, new_price);
+        }
+        Ok(())
+    }
+    
+    /// Get price history for an offer
+    pub fn get_price_history(&self, offer_id: &str) -> Result<Vec<(f64, DateTime<Utc>)>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT price, recorded_at FROM price_history WHERE offer_id = ?1 ORDER BY recorded_at DESC LIMIT 10"
+        )?;
+        
+        let rows = stmt.query_map(params![offer_id], |row| {
+            let price: f64 = row.get(0)?;
+            let time_str: String = row.get(1)?;
+            Ok((price, time_str))
+        })?;
+        
+        let mut history = Vec::new();
+        for row in rows {
+            let (price, time_str) = row?;
+            if let Ok(time) = DateTime::parse_from_rfc3339(&time_str) {
+                history.push((price, time.with_timezone(&Utc)));
+            }
+        }
+        
+        Ok(history)
+    }
+    
+    /// Get last known price for an offer
+    pub fn get_last_price(&self, offer_id: &str) -> Result<Option<f64>, StorageError> {
+        let price: Option<f64> = self.conn.query_row(
+            "SELECT price FROM offers WHERE id = ?1",
+            params![offer_id],
+            |row| row.get(0),
+        ).optional()?;
+        Ok(price)
+    }
+    
+    /// Save market price history snapshot for trend analysis
+    pub fn save_market_price_history(&self, model: &str, avg_price: f64, median_price: f64, offer_count: usize, std_dev: f64) -> Result<(), StorageError> {
+        // Ensure table exists
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS market_price_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                avg_price REAL NOT NULL,
+                median_price REAL NOT NULL,
+                offer_count INTEGER NOT NULL,
+                std_dev REAL NOT NULL
+            )",
+            [],
+        )?;
+        
+        self.conn.execute(
+            "INSERT INTO market_price_history (model, avg_price, median_price, offer_count, std_dev)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![model, avg_price, median_price, offer_count, std_dev],
+        )?;
+        
+        Ok(())
+    }
+    
+    /// Get market price history for last N days
+    pub fn get_market_price_history(&self, model: &str, days: i64) -> Result<Vec<(String, f64, f64, i64, f64)>, StorageError> {
+        let cutoff = Utc::now() - chrono::Duration::days(days);
+        
+        let mut stmt = self.conn.prepare(
+            "SELECT timestamp, avg_price, median_price, offer_count, std_dev
+             FROM market_price_history
+             WHERE model = ?1 AND datetime(timestamp) >= datetime(?2)
+             ORDER BY timestamp ASC"
+        )?;
+        
+        let rows = stmt.query_map(params![model, cutoff.to_rfc3339()], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })?;
+        
+        let mut history = Vec::new();
+        for row in rows {
+            history.push(row?);
+        }
+        
+        Ok(history)
     }
 }
 

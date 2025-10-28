@@ -26,6 +26,7 @@ use tokio::time::{sleep, Duration};
 use tracing::{error, info, warn};
 use tracing_subscriber;
 use futures::future::join_all;
+use chrono::Timelike;
 
 #[tokio::main]
 async fn main() {
@@ -317,27 +318,65 @@ async fn process_model(
         stats.avg_price, stats.std_dev
     );
 
+    // Check if we have previous stats (to avoid spam on first run)
+    let has_previous_stats = {
+        let storage_guard = storage.lock().await;
+        storage_guard.get_stats(&model_cfg.query).ok().flatten().is_some()
+    };
+
+    if !has_previous_stats {
+        info!("⏭️ First run for model '{}' - collecting data only, no notifications", model_cfg.query);
+    }
+
     info!("Updating stats in storage...");
     if let Err(e) = storage.lock().await.update_stats(&stats) {
         warn!("Stats update failed: {:?}", e);
     }
 
-    info!("Notifying cheapest offers...");
-    TelegramNotifier::check_and_notify_cheapest_for_model(
-        &model_cfg.query,
-        storage.clone(),
-        notifier.clone(),
-    )
-    .await;
+    // Skip notifications on first run (no historical data yet)
+    if !has_previous_stats {
+        info!("✅ Initial statistics saved for '{}'. Next cycle will check for deals.", model_cfg.query);
+        return;
+    }
 
-    // Find "good" offers using the analyzer's deal finding method
-    let good_offers = analyzer.find_deals(&offers, &stats, model_cfg);
-    info!("Found {} good offers", good_offers.len());
+    // Find "good" offers using the analyzer's deal finding method with scoring
+    let scored_offers = analyzer.find_deals(&offers, &stats, model_cfg);
+    info!("Found {} potentially good offers (scored >= 60)", scored_offers.len());
 
-    // Process each good offer and send notifications if necessary
-    for offer in good_offers {
-        info!("Checking offer: {} — {:.2} €", offer.id, offer.price);
+    // Check quiet hours
+    let now = chrono::Local::now();
+    let current_hour = now.hour();
+    let quiet_start = config.notifications.quiet_hours_start;
+    let quiet_end = config.notifications.quiet_hours_end;
+    
+    let is_quiet_time = if quiet_start > quiet_end {
+        // Overnight (e.g. 23:00 - 07:00)
+        current_hour >= quiet_start || current_hour < quiet_end
+    } else {
+        // Same day (e.g. 14:00 - 18:00)
+        current_hour >= quiet_start && current_hour < quiet_end
+    };
+    
+    if is_quiet_time {
+        info!("🌙 Quiet hours ({}-{}), skipping notifications", quiet_start, quiet_end);
+        info!("📭 No new deals to notify for model '{}'", model_cfg.query);
+        return;
+    }
 
+    // Limit notifications to top 3 offers per cycle (already sorted by score)
+    const MAX_NOTIFICATIONS_PER_CYCLE: usize = 3;
+    
+    // Collect offers to notify (for batch processing)
+    let mut offers_to_notify: Vec<&crate::analyzer::ScoredOffer> = Vec::new();
+    
+    for scored in scored_offers.iter() {
+        if offers_to_notify.len() >= MAX_NOTIFICATIONS_PER_CYCLE {
+            break;
+        }
+        
+        let offer = &scored.offer;
+        
+        // Check if already notified (prevents spam)
         match storage.lock().await.is_notified(&offer.id) {
             Ok(true) => {
                 info!("Already notified: {}", offer.id);
@@ -349,18 +388,205 @@ async fn process_model(
                 continue;
             }
         }
+        
+        // Track price changes if enabled
+        if config.notifications.track_price_history {
+            if let Ok(Some(old_price)) = storage.lock().await.get_last_price(&offer.id) {
+                if (offer.price - old_price).abs() > 0.01 {
+                    let _ = storage.lock().await.track_price_change(&offer.id, offer.price, old_price);
+                }
+            }
+        }
+        
+        offers_to_notify.push(scored);
+    }
+    
+    if offers_to_notify.is_empty() {
+        info!("📭 No new deals to notify for model '{}'", model_cfg.query);
+        return;
+    }
+    
+    // Send notifications (batch or individual)
+    let notified_count = if config.notifications.batch_notifications {
+        send_batch_notification(&offers_to_notify, &storage, &notifier, &config).await
+    } else {
+        send_individual_notifications(&offers_to_notify, &storage, &notifier).await
+    };
+    
+    if notified_count > 0 {
+        info!("📬 Sent {} notification(s) for model '{}'", notified_count, model_cfg.query);
+    } else {
+        info!("📭 No new deals to notify for model '{}'", model_cfg.query);
+    }
+    
+    info!("Finished processing model: {}", model_cfg.query);
+}
 
-        info!("Sending Telegram notification...");
-        if let Err(e) = notifier.notify(&offer).await {
+/// Send notifications individually (old way)
+async fn send_individual_notifications(
+    offers: &[&crate::analyzer::ScoredOffer],
+    storage: &Arc<Mutex<SqliteStorage>>,
+    notifier: &Arc<TelegramNotifier>,
+) -> usize {
+    let mut count = 0;
+    
+    for scored in offers {
+        let offer = &scored.offer;
+
+        // Check seller risk
+        let seller_offers_count = {
+            let storage_guard = storage.lock().await;
+            if let Some(user_name) = &offer.user_name {
+                storage_guard
+                    .get_all_offers()
+                    .ok()
+                    .map(|offers| {
+                        offers.iter()
+                            .filter(|o| o.user_name.as_ref() == Some(user_name))
+                            .count()
+                    })
+                    .unwrap_or(1)
+            } else {
+                1
+            }
+        };
+        
+        let seller_risk = utils::assess_seller_risk(
+            offer.user_member_since.as_deref(),
+            seller_offers_count
+        );
+        let risk_emoji = utils::seller_risk_emoji(seller_risk);
+        
+        // Compact notification format
+        let score_emoji = if scored.score >= 90.0 {
+            "🔥"
+        } else if scored.score >= 80.0 {
+            "⭐"
+        } else if scored.score >= 70.0 {
+            "✨"
+        } else {
+            "💎"
+        };
+        
+        let seller_info = if let Some(member_since) = &offer.user_member_since {
+            format!(" | {} {}", risk_emoji, member_since)
+        } else {
+            format!(" | {} New", risk_emoji)
+        };
+        
+        let enhanced_message = format!(
+            "{} <b>{:.0}★</b> | {:.0}€ | {}\n\
+             📍 {}{} | 🔗 <a href=\"{}\">Link</a>",
+            score_emoji,
+            scored.score,
+            offer.price,
+            html_escape(&offer.title).chars().take(50).collect::<String>(),
+            html_escape(&offer.location),
+            seller_info,
+            html_escape(&offer.link)
+        );
+        
+        info!(
+            "💎 Sending notification | Score: {:.1} | Price: {:.2} € | {}",
+            scored.score, offer.price, offer.title
+        );
+        
+        if let Err(e) = notifier.notify_text(&enhanced_message).await {
             warn!("Telegram send error: {:?}", e);
         } else if let Err(e) = storage.lock().await.mark_notified(&offer.id) {
             warn!("Mark notified failed: {:?}", e);
         } else {
-            info!("Offer notified and marked.");
+            count += 1;
+            info!("✅ Offer notified and marked.");
         }
     }
+    
+    count
+}
 
-    info!("Finished processing model: {}", model_cfg.query);
+/// Send batch notification (all offers in one message)
+async fn send_batch_notification(
+    offers: &[&crate::analyzer::ScoredOffer],
+    storage: &Arc<Mutex<SqliteStorage>>,
+    notifier: &Arc<TelegramNotifier>,
+    _config: &Arc<AppConfig>,
+) -> usize {
+    if offers.is_empty() {
+        return 0;
+    }
+    
+    let mut message = String::from("🎯 <b>New Great Deals Found!</b>\n\n");
+    let mut count = 0;
+    
+    for (idx, scored) in offers.iter().enumerate() {
+        let offer = &scored.offer;
+        
+        let score_emoji = if scored.score >= 90.0 { "🔥" }
+        else if scored.score >= 80.0 { "⭐" }
+        else if scored.score >= 70.0 { "✨" }
+        else { "💎" };
+        
+        let seller_offers_count = {
+            let storage_guard = storage.lock().await;
+            if let Some(user_name) = &offer.user_name {
+                storage_guard
+                    .get_all_offers()
+                    .ok()
+                    .map(|offers| {
+                        offers.iter()
+                            .filter(|o| o.user_name.as_ref() == Some(user_name))
+                            .count()
+                    })
+                    .unwrap_or(1)
+            } else {
+                1
+            }
+        };
+        
+        let seller_risk = utils::assess_seller_risk(
+            offer.user_member_since.as_deref(),
+            seller_offers_count
+        );
+        let risk_emoji = utils::seller_risk_emoji(seller_risk);
+        
+        message.push_str(&format!(
+            "{}. {} <b>{:.0}★</b> | {:.0}€ | {}\n   📍 {} {} | <a href=\"{}\">Link</a>\n\n",
+            idx + 1,
+            score_emoji,
+            scored.score,
+            offer.price,
+            html_escape(&offer.title).chars().take(40).collect::<String>(),
+            html_escape(&offer.location).chars().take(20).collect::<String>(),
+            risk_emoji,
+            html_escape(&offer.link)
+        ));
+        
+        count += 1;
+    }
+    
+    info!("📬 Sending batch notification with {} offers", count);
+    
+    if let Err(e) = notifier.notify_text(&message).await {
+        warn!("Batch notification error: {:?}", e);
+        return 0;
+    }
+    
+    // Mark all as notified
+    for scored in offers {
+        if let Err(e) = storage.lock().await.mark_notified(&scored.offer.id) {
+            warn!("Mark notified failed: {:?}", e);
+        }
+    }
+    
+    count
+}
+
+/// Escape HTML special characters
+fn html_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// Log and save HTML for debugging purposes

@@ -19,6 +19,8 @@
 pub mod price_analysis;
 pub mod market_indicators;
 pub mod lifecycle;
+pub mod timing_analysis;
+pub mod reseller_tools;
 
-// Re-export the main Analyzer implementation for ease of use.
-pub use price_analysis::AnalyzerImpl;
+// Re-export the main Analyzer implementation and types for ease of use.
+pub use price_analysis::{AnalyzerImpl, ScoredOffer, ScoreBreakdown, ExtendedStats};
