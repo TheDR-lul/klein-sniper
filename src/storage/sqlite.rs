@@ -14,8 +14,8 @@ impl SqliteStorage {
         let conn = Connection::open(db_path)?;
         
         // Enable WAL mode for better concurrent access
-        conn.execute("PRAGMA journal_mode=WAL", [])?;
-        conn.execute("PRAGMA synchronous=NORMAL", [])?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
 
         conn.execute_batch(
             "

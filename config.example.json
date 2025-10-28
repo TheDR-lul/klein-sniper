@@ -1,36 +1,36 @@
 {
   "telegram_bot_token": "YOUR_BOT_TOKEN_HERE",
-  "telegram_chat_id": 0,
-  "check_interval_seconds": 120,
-  
+  "telegram_chat_id": 123456789,
+  "check_interval_seconds": 180,
   "models": [
     {
-      "query": "rog ally",
-      "category_id": "k0",
-      "deviation_threshold": 0.2,
-      "min_price_delta": 100,
-      "min_price": 240,
-      "max_price": 800,
-      "match_keywords": ["z1 extreme", "extreme"]
+      "query": "iPhone 13",
+      "category_id": "k0c173",
+      "min_price": 200.0,
+      "max_price": 500.0,
+      "deviation_threshold": 0.15,
+      "min_price_delta": 20.0,
+      "match_keywords": ["iphone", "13", "pro"]
     }
   ],
-  
   "scraper": {
     "max_pages": 20,
     "delay_seconds": 2,
     "max_retries": 3,
-    "requests_per_minute": 30
+    "requests_per_minute": 30,
+    "user_agents": [
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0"
+    ]
   },
-  
   "analyzer": {
     "volatility_threshold": 20.0,
     "price_step": 50
   },
-  
   "database": {
     "offer_retention_days": 30,
     "stats_retention_days": 90,
     "auto_cleanup_on_startup": true
   }
 }
-

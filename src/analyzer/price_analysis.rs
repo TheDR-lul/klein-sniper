@@ -5,6 +5,7 @@ use crate::analyzer::market_indicators::{MarketAnalyzer, PriceRange};
 use crate::analyzer::lifecycle::build_lifecycle_data;
 use std::collections::HashMap;
 
+
 /// Trait defining the interface for an offer analyzer.
 pub trait Analyzer {
     fn calculate_stats(&self, offers: &[Offer]) -> ModelStats;
