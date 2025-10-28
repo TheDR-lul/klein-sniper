@@ -6,6 +6,7 @@ mod analyzer;
 mod normalizer;
 mod notifier;
 mod storage;
+mod utils;
 
 use analyzer::AnalyzerImpl;
 use notifier::TelegramNotifier;
@@ -28,13 +29,21 @@ use futures::future::join_all;
 
 #[tokio::main]
 async fn main() {
-    // Initialize logging with environment filter support
+    // Initialize structured logging with enhanced formatting
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
         )
+        .with_target(true)       // Show module paths
+        .with_thread_ids(true)   // Show thread IDs
+        .with_line_number(true)  // Show line numbers
+        .with_level(true)        // Show log levels
+        .with_ansi(true)         // Colored output
         .init();
+    
+    info!("🚀 KleinSniper starting...");
+    info!("📝 Log level: INFO (set RUST_LOG=debug for verbose output)");
 
     // Setup will be completed after config load to send panics to Telegram
     setup_panic_hook_preliminary();
@@ -254,6 +263,18 @@ async fn process_model(
 
     // Normalize offers based on configuration settings
     normalize_all(&mut offers, &config.models);
+    
+    // Filter out suspicious sellers (spam/scam protection)
+    let offers_before = offers.len();
+    offers = utils::filter_suspicious_sellers(offers, 5, 10.0);
+    if offers_before != offers.len() {
+        info!(
+            "🛡️ Filtered {} suspicious offers ({} → {})",
+            offers_before - offers.len(),
+            offers_before,
+            offers.len()
+        );
+    }
 
     // Save offers into storage and record seen IDs
     let mut seen_ids = HashSet::new();
