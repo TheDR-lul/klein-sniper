@@ -80,10 +80,9 @@ impl Analyzer for AnalyzerImpl {
         stats: &ModelStats,
         cfg: &ModelConfig,
         analysis: &AnalysisResult,
+        volatility_threshold: f64,
     ) -> Vec<Offer> {
         let mut result = Vec::new();
-        // Define an arbitrary volatility threshold (this could be made configurable)
-        let volatility_threshold: f64 = 20.0;
         
         for offer in offers {
             // Basic price range filtering
@@ -159,81 +158,6 @@ impl AnalyzerImpl {
             rsi,
             volatility_map,
             lifespan_median,
-        }
-    }
-}
-
-/// --- Additional functions provided in MarketAnalyzer (extended functions) ---
-impl MarketAnalyzer {
-    /// Calculates the price volatility (standard deviation) of offers for each price range.
-    pub fn price_volatility(offers: &[OfferLifecycle]) -> HashMap<PriceRange, f64> {
-        let mut map: HashMap<PriceRange, Vec<f64>> = HashMap::new();
-        for offer in offers {
-            let range = Self::get_price_range(offer.price);
-            map.entry(range).or_default().push(offer.price);
-        }
-        map.into_iter()
-            .map(|(range, prices)| {
-                let count = prices.len() as f64;
-                let mean = prices.iter().sum::<f64>() / count;
-                let variance = prices.iter().map(|p| (p - mean).powi(2)).sum::<f64>() / count;
-                (range, variance.sqrt())
-            })
-            .collect()
-    }
-
-    /// Calculates the median lifespan for each price range.
-    pub fn lifespan_median(offers: &[OfferLifecycle]) -> HashMap<PriceRange, chrono::Duration> {
-        let mut map: HashMap<PriceRange, Vec<chrono::Duration>> = HashMap::new();
-        for offer in offers {
-            let range = Self::get_price_range(offer.price);
-            let lifespan = offer.last_seen - offer.first_seen;
-            map.entry(range).or_default().push(lifespan);
-        }
-        map.into_iter()
-            .map(|(range, mut durations)| {
-                // Sort durations by their value in seconds.
-                durations.sort_by_key(|d| d.num_seconds());
-                let mid = durations.len() / 2;
-                let median = if durations.len() % 2 == 0 {
-                    let d1 = durations[mid - 1];
-                    let d2 = durations[mid];
-                    d1 + (d2 - d1) / 2
-                } else {
-                    durations[mid]
-                };
-                (range, median)
-            })
-            .collect()
-    }
-
-    /// Calculates the moving average of a slice of data with the given window size.
-    pub fn moving_average(data: &[f64], window_size: usize) -> Vec<f64> {
-        if window_size == 0 || data.len() < window_size {
-            return Vec::new();
-        }
-        data.windows(window_size)
-            .map(|window| window.iter().sum::<f64>() / window_size as f64)
-            .collect()
-    }
-
-    /// Calculates the Pearson correlation coefficient between two slices.
-    /// Returns None if slices have different lengths or are empty.
-    pub fn compute_correlation(x: &[f64], y: &[f64]) -> Option<f64> {
-        if x.len() != y.len() || x.is_empty() {
-            return None;
-        }
-        let n = x.len() as f64;
-        let mean_x = x.iter().sum::<f64>() / n;
-        let mean_y = y.iter().sum::<f64>() / n;
-        let numerator: f64 = x.iter().zip(y.iter()).map(|(xi, yi)| (xi - mean_x) * (yi - mean_y)).sum();
-        let denominator_x: f64 = x.iter().map(|xi| (xi - mean_x).powi(2)).sum();
-        let denominator_y: f64 = y.iter().map(|yi| (yi - mean_y).powi(2)).sum();
-        let denominator = (denominator_x * denominator_y).sqrt();
-        if denominator == 0.0 {
-            None
-        } else {
-            Some(numerator / denominator)
         }
     }
 }

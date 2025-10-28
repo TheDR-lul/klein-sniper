@@ -1,17 +1,32 @@
 # 🕵️‍♂️ KleinSniper
 
-**KleinSniper** is a Rust-based marketplace analyzer that scrapes [Kleinanzeigen.de](https://www.kleinanzeigen.de/) for interesting offers, detects price anomalies, and sends Telegram notifications about deals.
+**KleinSniper** is a high-performance, production-ready Rust application that monitors [Kleinanzeigen.de](https://www.kleinanzeigen.de/) for great deals, detects price anomalies, and sends real-time Telegram notifications.
 
 ## ✨ Features
 
-- 🔍 Scrapes all pages of Kleinanzeigen search results
-- 💰 Calculates average price and standard deviation
-- 📉 Detects underpriced items based on configurable thresholds
-- 📦 Normalizes offer models by keywords
-- 📊 Saves offer statistics to SQLite
-- 📬 Sends alerts via Telegram bot
-- ⚙️ Configurable via `config.json`
-- 🗑 Automatically removes outdated or deleted offers from the database
+### Core Functionality
+- 🔍 **Multi-page scraping** with automatic pagination
+- 💰 **Statistical analysis** - average price, standard deviation, RSI
+- 📉 **Smart deal detection** based on configurable thresholds
+- 📦 **Model normalization** by keywords
+- 📊 **SQLite storage** with automatic cleanup
+- 📬 **Telegram bot** with rich HTML formatting
+
+### Reliability & Performance
+- 🔄 **Graceful shutdown** handling (Ctrl+C support)
+- ⚙️ **Retry logic** with exponential backoff
+- 🛡️ **Rate limiting** to avoid IP blocks
+- 💾 **Database indexes** for fast queries
+- ⚡ **Cached selectors** for optimal parsing
+- 🚨 **Panic notifications** sent to Telegram
+
+### Production Features
+- 🐳 **Docker support** with multi-stage builds
+- 📈 **Application metrics** and statistics
+- 🧹 **Auto-cleanup** of old database records
+- 📊 **Data export** to CSV/JSON
+- 🔍 **Database statistics** command
+- 🎯 **Configurable retention** periods
 
 ---
 
@@ -38,13 +53,14 @@
 
 ## ⚙️ Configuration
 
-Edit the `config.json`:
+Create `config.json` with full customization:
 
 ```json
 {
-  "telegram_bot_token": "your-bot-token",
+  "telegram_bot_token": "YOUR_BOT_TOKEN",
   "telegram_chat_id": 123456789,
-  "check_interval_seconds": 60,
+  "check_interval_seconds": 120,
+  
   "models": [
     {
       "query": "rog ally",
@@ -54,39 +70,63 @@ Edit the `config.json`:
       "min_price": 240,
       "max_price": 800,
       "match_keywords": ["z1 extreme", "extreme"]
-    },
-    {
-      "query": "rog ally",
-      "category_id": "k0",
-      "deviation_threshold": 0.2,
-      "min_price_delta": 100,
-      "min_price": 200,
-      "max_price": 800,
-      "match_keywords": ["z1"]
     }
-  ]
+  ],
+  
+  "scraper": {
+    "max_pages": 20,
+    "delay_seconds": 2,
+    "max_retries": 3,
+    "requests_per_minute": 30,
+    "user_agents": [
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36..."
+    ]
+  },
+  
+  "analyzer": {
+    "volatility_threshold": 20.0,
+    "price_step": 50
+  },
+  
+  "database": {
+    "offer_retention_days": 30,
+    "stats_retention_days": 90,
+    "auto_cleanup_on_startup": true
+  }
 }
 ```
 
-- `deviation_threshold` — percent below average price to trigger notification
-- `min_price_delta` — absolute price delta below average to trigger notification
-- `match_keywords` — filters only offers containing these words
+**Model Settings:**
+- `deviation_threshold` - Percent below average to trigger (0.2 = 20%)
+- `min_price_delta` - Absolute price difference required
+- `match_keywords` - Filter offers by keywords
+
+**Scraper Settings:**
+- `max_retries` - Number of retry attempts (0 = no retry)
+- `requests_per_minute` - Rate limit for requests
+- `delay_seconds` - Delay between page fetches
+
+**Database Settings:**
+- `offer_retention_days` - Auto-delete offers older than X days (0 = keep forever)
+- `auto_cleanup_on_startup` - Run cleanup when app starts
 
 ---
 
 ## 💬 Telegram Commands
 
-Once the bot is running, send these commands:
-
-- `/ping` – check bot status
-- `/status` – show system status
-- `/last` – show last offer
-- `/top5` – show top 5 cheapest offers
-- `/avg` – show average prices per model
-- `/refresh` – manually trigger scraping
-- `/uptime` – show uptime
-- `/help` – show commands list
-- `/config` – show cconfig
+| Command | Description |
+|---------|-------------|
+| `/ping` | Check bot connection |
+| `/status` | Show analyzer status |
+| `/help` | List all commands |
+| `/last` | Show last great deal |
+| `/top5` | Top 5 cheapest offers |
+| `/avg` | Average prices by model |
+| `/config` | Show current configuration |
+| `/refresh` | Manually trigger check |
+| `/uptime` | Service uptime |
+| `/dbstats` | Database statistics |
+| `/stats` | Application metrics |
 
 ---
 
@@ -108,12 +148,40 @@ Once the bot is running, send these commands:
 ## 🛠️ Run Locally
 
 ```bash
+# Clone repository
 git clone https://github.com/yourname/klein-sniper
 cd klein-sniper
+
+# Create config.json (see Configuration section)
+cp config.example.json config.json
+# Edit config.json with your bot token and chat ID
+
+# Run in release mode
 cargo run --release
 ```
 
-> Make sure `config.json` is in the root directory.
+### Docker Deployment
+
+```bash
+# Build and run with docker-compose
+docker-compose up -d
+
+# View logs
+docker-compose logs -f klein-sniper
+
+# Stop
+docker-compose down
+```
+
+### Environment Variables
+
+```bash
+# Set log level (default: info)
+export RUST_LOG=debug
+
+# Run
+cargo run --release
+```
 
 ---
 

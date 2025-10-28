@@ -29,4 +29,7 @@ data.db
 # Cargo
 Cargo.lock
 
+# Documentation and reports
+docs/
+
 # Counter

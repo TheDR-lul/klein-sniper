@@ -1,0 +1,36 @@
+{
+  "telegram_bot_token": "YOUR_BOT_TOKEN_HERE",
+  "telegram_chat_id": 0,
+  "check_interval_seconds": 120,
+  
+  "models": [
+    {
+      "query": "rog ally",
+      "category_id": "k0",
+      "deviation_threshold": 0.2,
+      "min_price_delta": 100,
+      "min_price": 240,
+      "max_price": 800,
+      "match_keywords": ["z1 extreme", "extreme"]
+    }
+  ],
+  
+  "scraper": {
+    "max_pages": 20,
+    "delay_seconds": 2,
+    "max_retries": 3,
+    "requests_per_minute": 30
+  },
+  
+  "analyzer": {
+    "volatility_threshold": 20.0,
+    "price_step": 50
+  },
+  
+  "database": {
+    "offer_retention_days": 30,
+    "stats_retention_days": 90,
+    "auto_cleanup_on_startup": true
+  }
+}
+

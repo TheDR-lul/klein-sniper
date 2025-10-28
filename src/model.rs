@@ -43,17 +43,25 @@ pub struct ScrapeRequest {
 }
 
 /// Ошибки, возникающие при загрузке страниц
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ScraperError {
+    #[error("🌐 HTTP ошибка: {0}")]
     HttpError(String),
+    
+    #[error("❌ Некорректный ответ сервера: {0}")]
     InvalidResponse(String),
+    
+    #[error("📄 Ошибка парсинга HTML: {0}")]
     HtmlParseError(String),
 }
 
 /// Ошибки, возникающие при разборе HTML
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ParserError {
+    #[error("📄 Ошибка парсинга HTML: {0}")]
     HtmlParseError(String),
+    
+    #[error("🔍 Отсутствующее поле: {0}")]
     MissingField(String),
 }
 
@@ -78,8 +86,11 @@ impl From<rusqlite::Error> for StorageError {
 }
 
 /// Ошибки при уведомлениях (например, Telegram)
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum NotifyError {
+    #[error("📡 Ошибка API: {0}")]
     ApiError(String),
+    
+    #[error("🔌 Сервис недоступен")]
     Unreachable,
 }

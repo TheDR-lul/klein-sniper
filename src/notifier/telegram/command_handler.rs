@@ -1,83 +1,110 @@
-// notifier/telegram/command_handler.rs
-
 use crate::notifier::telegram::TelegramNotifier;
+use std::sync::Arc;
+use teloxide::prelude::*;
+use teloxide::utils::command::BotCommands;
 use tracing::{info, warn};
 
-/// Handles an incoming command and triggers the corresponding action.
-pub async fn handle_command(command_text: &str, notifier: &TelegramNotifier) {
-    info!("Handling command: {}", command_text);
-    match command_text {
-        "/ping" => {
-            if let Err(e) = notifier.notify_text("✅ I am online!").await {
-                warn!("/ping error: {:?}", e);
+/// Определение команд бота
+#[derive(BotCommands, Clone)]
+#[command(rename_rule = "lowercase", description = "Доступные команды:")]
+pub enum Command {
+    #[command(description = "проверка соединения")]
+    Ping,
+    #[command(description = "статус анализатора")]
+    Status,
+    #[command(description = "список команд")]
+    Help,
+    #[command(description = "последняя выгодная сделка")]
+    Last,
+    #[command(description = "топ-5 офферов")]
+    Top5,
+    #[command(description = "средние цены")]
+    Avg,
+    #[command(description = "текущая конфигурация")]
+    Config,
+    #[command(description = "ручной перезапуск")]
+    Refresh,
+    #[command(description = "время работы сервиса")]
+    Uptime,
+    #[command(description = "принудительная отправка")]
+    ForceNotify,
+    #[command(description = "статистика базы данных")]
+    DbStats,
+}
+
+/// Запускает бота и обрабатывает команды
+pub async fn run_bot(notifier: Arc<TelegramNotifier>) {
+    let handler = Update::filter_message()
+        .filter_command::<Command>()
+        .endpoint(move |bot: Bot, msg: Message, cmd: Command| {
+            let notifier = notifier.clone();
+            async move {
+                handle_command(bot, msg, cmd, notifier).await;
+                Ok(())
             }
-        },
-        "/status" => {
-            if let Err(e) = notifier.notify_text("📊 Analyzer is running. Waiting for the next check.").await {
-                warn!("/status error: {:?}", e);
-            }
-        },
-        "/help" => {
-            let help_msg = "📋 Available commands:\n\
-                /ping — check connection\n\
-                /status — analyzer status\n\
-                /help — command list\n\
-                /last — last great deal\n\
-                /top5 — top 5 offers\n\
-                /avg — average price\n\
-                /config — current configuration\n\
-                /refresh — manual restart\n\
-                /uptime — service uptime";
-            if let Err(e) = notifier.notify_text(help_msg).await {
-                warn!("/help error: {:?}", e);
-            }
-        },
-        "/refresh" => {
+        });
+
+    Dispatcher::builder(notifier.bot.clone(), handler)
+        .enable_ctrlc_handler()
+        .build()
+        .dispatch()
+        .await;
+}
+
+/// Обработчик команд
+async fn handle_command(
+    bot: Bot,
+    msg: Message,
+    cmd: Command,
+    notifier: Arc<TelegramNotifier>,
+) {
+    let chat_id = msg.chat.id;
+    
+    info!("Received command: {:?} from chat {}", cmd, chat_id);
+
+    let response = match cmd {
+        Command::Ping => {
+            "✅ Я онлайн!".to_string()
+        }
+        Command::Status => {
+            "📊 Анализатор работает. Ожидание следующей проверки.".to_string()
+        }
+        Command::Help => {
+            Command::descriptions().to_string()
+        }
+        Command::Refresh => {
             info!("/refresh command received, triggering refresh...");
             notifier.refresh_notify.notify_one();
-            if let Err(e) = notifier.notify_text("🔄 Forced restart initiated.").await {
-                warn!("/refresh error: {:?}", e);
-            }
-        },
-        "/uptime" => {
+            "🔄 Принудительный перезапуск инициирован.".to_string()
+        }
+        Command::Uptime => {
             let uptime = notifier.start_time.elapsed();
-            let msg = format!(
-                "⏱ Uptime: {:02}:{:02}:{:02}",
+            format!(
+                "⏱ Время работы: {:02}:{:02}:{:02}",
                 uptime.as_secs() / 3600,
                 (uptime.as_secs() % 3600) / 60,
                 uptime.as_secs() % 60
-            );
-            if let Err(e) = notifier.notify_text(&msg).await {
-                warn!("/uptime error: {:?}", e);
-            }
-        },
-        "/last" => {
+            )
+        }
+        Command::Last => {
             match notifier.storage.lock().await.get_last_offer() {
                 Ok(Some(offer)) => {
-                    let msg = format!(
-                        "🕵️ Last offer:\n📦 {}\n💰 {:.2} €\n📍 {}\n🔗 {}",
+                    format!(
+                        "🕵️ Последний оффер:\n📦 {}\n💰 {:.2} €\n📍 {}\n🔗 {}",
                         offer.title, offer.price, offer.location, offer.link
-                    );
-                    if let Err(e) = notifier.notify_text(&msg).await {
-                        warn!("/last notify error: {:?}", e);
-                    }
-                },
-                Ok(None) => {
-                    if let Err(e) = notifier.notify_text("📭 No offers in the database.").await {
-                        warn!("/last empty notify error: {:?}", e);
-                    }
-                },
+                    )
+                }
+                Ok(None) => "📭 Нет офферов в базе данных.".to_string(),
                 Err(e) => {
-                    if let Err(send_err) = notifier.notify_text(&format!("❌ Error: {:?}", e)).await {
-                        warn!("/last send error: {:?}", send_err);
-                    }
+                    warn!("/last error: {:?}", e);
+                    format!("❌ Ошибка: {:?}", e)
                 }
             }
-        },
-        "/top5" => {
+        }
+        Command::Top5 => {
             match notifier.storage.lock().await.get_top5_offers() {
                 Ok(offers) if !offers.is_empty() => {
-                    let mut msg = String::from("🏆 Top-5 best offers:\n");
+                    let mut msg = String::from("🏆 Топ-5 лучших офферов:\n");
                     for (i, offer) in offers.iter().enumerate() {
                         msg.push_str(&format!(
                             "{}. {} — {:.2} €\n📍 {}\n🔗 {}\n\n",
@@ -88,85 +115,84 @@ pub async fn handle_command(command_text: &str, notifier: &TelegramNotifier) {
                             offer.link
                         ));
                     }
-                    if let Err(e) = notifier.notify_text(&msg).await {
-                        warn!("/top5 notify error: {:?}", e);
-                    }
-                },
-                Ok(_) => {
-                    if let Err(e) = notifier.notify_text("📭 No offers in the database.").await {
-                        warn!("/top5 empty notify error: {:?}", e);
-                    }
-                },
+                    msg
+                }
+                Ok(_) => "📭 Нет офферов в базе данных.".to_string(),
                 Err(e) => {
-                    if let Err(send_err) = notifier.notify_text(&format!("❌ Error: {:?}", e)).await {
-                        warn!("/top5 send error: {:?}", send_err);
-                    }
+                    warn!("/top5 error: {:?}", e);
+                    format!("❌ Ошибка: {:?}", e)
                 }
             }
-        },
-        "/avg" => {
+        }
+        Command::Avg => {
             match notifier.storage.lock().await.get_average_prices() {
                 Ok(prices) if !prices.is_empty() => {
-                    let mut msg = String::from("📊 Average prices by model:\n");
+                    let mut msg = String::from("📊 Средние цены по моделям:\n");
                     for (model, price) in prices {
                         msg.push_str(&format!("🔹 {} — {:.2} €\n", model, price));
                     }
-                    if let Err(e) = notifier.notify_text(&msg).await {
-                        warn!("/avg notify error: {:?}", e);
-                    }
-                },
-                Ok(_) => {
-                    if let Err(e) = notifier.notify_text("📭 No model statistics available.").await {
-                        warn!("/avg empty notify error: {:?}", e);
-                    }
-                },
+                    msg
+                }
+                Ok(_) => "📭 Нет статистики по моделям.".to_string(),
                 Err(e) => {
-                    if let Err(send_err) = notifier.notify_text(&format!("❌ Error: {:?}", e)).await {
-                        warn!("/avg send error: {:?}", send_err);
-                    }
+                    warn!("/avg error: {:?}", e);
+                    format!("❌ Ошибка: {:?}", e)
                 }
             }
-        },
-        "/config" => {
+        }
+        Command::Config => {
             if notifier.config.models.is_empty() {
-                if let Err(e) = notifier.notify_text("⚠️ No models loaded in the configuration.").await {
-                    warn!("/config empty error: {:?}", e);
-                }
+                "⚠️ Не загружено ни одной модели в конфигурации.".to_string()
             } else {
-                let mut msg = String::from("⚙️ Loaded models:\n");
+                let mut msg = String::from("⚙️ Загруженные модели:\n");
                 for model in &notifier.config.models {
                     msg.push_str(&format!("🔸 {} [{}]\n", model.query, model.category_id));
                 }
-                if let Err(e) = notifier.notify_text(&msg).await {
-                    warn!("/config notify error: {:?}", e);
-                }
+                msg
             }
-        },
-        "/force_notify" => {
+        }
+        Command::ForceNotify => {
             match notifier.storage.lock().await.get_last_offer() {
                 Ok(Some(offer)) => {
                     match notifier.notify(&offer).await {
                         Ok(_) => {
                             let _ = notifier.storage.lock().await.mark_notified(&offer.id);
-                        },
+                            "✅ Уведомление отправлено!".to_string()
+                        }
                         Err(e) => {
-                            if let Err(se) = notifier.notify_text(&format!("❌ Error sending: {:?}", e)).await {
-                                warn!("/force_notify send error: {:?}", se);
-                            }
+                            warn!("/force_notify send error: {:?}", e);
+                            format!("❌ Ошибка отправки: {:?}", e)
                         }
                     }
-                },
-                _ => {
-                    if let Err(e) = notifier.notify_text("❌ No last offer available for notification.").await {
-                        warn!("/force_notify notify error: {:?}", e);
-                    }
                 }
-            }
-        },
-        _ => {
-            if let Err(e) = notifier.notify_text("🤖 Unknown command. Type /help for a list of commands.").await {
-                warn!("Unknown command notify error: {:?}", e);
+                _ => "❌ No last offer available for notification.".to_string(),
             }
         }
+        Command::DbStats => {
+            match notifier.storage.lock().await.get_database_stats() {
+                Ok(stats) => {
+                    let size_mb = stats.db_size_bytes as f64 / 1024.0 / 1024.0;
+                    format!(
+                        "💾 <b>Database Statistics</b>\n\n\
+                         📦 Offers: {}\n\
+                         ✅ Notified: {}\n\
+                         📊 Stats records: {}\n\
+                         💿 DB size: {:.2} MB",
+                        stats.offer_count,
+                        stats.notified_count,
+                        stats.stats_count,
+                        size_mb
+                    )
+                }
+                Err(e) => {
+                    warn!("/dbstats error: {:?}", e);
+                    format!("❌ Error: {:?}", e)
+                }
+            }
+        }
+    };
+
+    if let Err(e) = bot.send_message(chat_id, response).await {
+        warn!("Failed to send response: {:?}", e);
     }
 }

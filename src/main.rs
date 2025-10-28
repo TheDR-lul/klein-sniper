@@ -28,13 +28,16 @@ use futures::future::join_all;
 
 #[tokio::main]
 async fn main() {
-    // Initialize logging
-    tracing_subscriber::fmt::init();
+    // Initialize logging with environment filter support
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+        )
+        .init();
 
-    // Set panic hook to log details about any panic
-    std::panic::set_hook(Box::new(|panic_info| {
-        eprintln!("😱 Panic occurred: {:?}", panic_info);
-    }));
+    // Setup will be completed after config load to send panics to Telegram
+    setup_panic_hook_preliminary();
 
     // Load configuration from file
     let config: Arc<AppConfig> = match load_config("config.json") {
@@ -45,8 +48,14 @@ async fn main() {
         }
     };
 
-    // Create the base scraper instance
-    let base_scraper = ScraperImpl::new();
+    // Create the base scraper instance with configuration
+    let base_scraper = ScraperImpl::with_config(
+        &config.scraper.user_agents,
+        config.scraper.max_pages,
+        config.scraper.delay_seconds,
+        config.scraper.max_retries,
+        config.scraper.requests_per_minute,
+    );
     let parser = KleinanzeigenParser::new();
     let analyzer = AnalyzerImpl::new();
 
@@ -58,6 +67,18 @@ async fn main() {
             return;
         }
     };
+    
+    // Run database cleanup if enabled
+    if config.database.auto_cleanup_on_startup {
+        info!("Running automatic database cleanup on startup...");
+        let storage_clone = storage.clone();
+        if let Err(e) = storage_clone.lock().await.run_full_cleanup(
+            config.database.offer_retention_days,
+            config.database.stats_retention_days,
+        ) {
+            warn!("Database cleanup failed: {:?}", e);
+        }
+    }
 
     // Initialize notifier (Telegram) and refresh notifier
     let refresh_notify = Arc::new(Notify::new());
@@ -72,12 +93,64 @@ async fn main() {
     // Spawn listener for manual refresh (e.g. via /refresh command)
     TelegramNotifier::spawn_listener(notifier.clone());
 
+    // Setup panic hook to send errors to Telegram
+    setup_panic_hook_with_telegram(notifier.clone());
+
     info!("Sending startup message...");
     if let Err(e) = notifier.notify_text("🚀 KleinSniper started!").await {
         warn!("Startup notification failed: {:?}", e);
     }
 
-    // Main processing loop
+    // Main processing loop with graceful shutdown
+    let shutdown_result = tokio::select! {
+        _ = run_main_loop(
+            config.clone(),
+            base_scraper,
+            parser,
+            analyzer,
+            storage.clone(),
+            refresh_notify.clone(),
+            notifier.clone(),
+        ) => {
+            info!("Main loop ended normally");
+            Ok(())
+        }
+        _ = tokio::signal::ctrl_c() => {
+            info!("Received Ctrl+C signal, initiating graceful shutdown...");
+            Err("shutdown")
+        }
+    };
+
+    // Graceful shutdown sequence
+    if shutdown_result.is_err() {
+        info!("Starting graceful shutdown sequence...");
+        
+        // Send shutdown notification
+        if let Err(e) = notifier.notify_text("🛑 KleinSniper shutting down...").await {
+            warn!("Failed to send shutdown notification: {:?}", e);
+        }
+        
+        // Wait for pending operations (give 5 seconds grace period)
+        info!("Waiting for pending operations to complete...");
+        sleep(Duration::from_secs(5)).await;
+        
+        // Drop storage to ensure all writes are flushed
+        drop(storage);
+        
+        info!("✅ Graceful shutdown complete");
+    }
+}
+
+/// Run the main processing loop
+async fn run_main_loop(
+    config: Arc<AppConfig>,
+    base_scraper: ScraperImpl,
+    parser: KleinanzeigenParser,
+    analyzer: AnalyzerImpl,
+    storage: Arc<Mutex<SqliteStorage>>,
+    refresh_notify: Arc<Notify>,
+    notifier: Arc<TelegramNotifier>,
+) {
     loop {
         info!("Entering main loop...");
         info!("Models to process: {}", config.models.len());
@@ -131,12 +204,16 @@ async fn process_model(
         category_id: model_cfg.category_id.clone(),
     };
 
-    // Create a scraper instance for the current model (cloning the client)
+    // Create a scraper instance for the current model (cloning the client and rate limiter)
     let scraper = ScraperImpl {
         client: base_scraper.client.clone(),
         category_id: model_cfg.category_id.clone(),
         min_price: model_cfg.min_price,
         max_price: model_cfg.max_price,
+        max_pages: base_scraper.max_pages,
+        delay_seconds: base_scraper.delay_seconds,
+        max_retries: base_scraper.max_retries,
+        rate_limiter: base_scraper.rate_limiter.clone(),
     };
 
     // Optionally, retrieve previous stats from storage for logging
@@ -265,7 +342,7 @@ async fn process_model(
     info!("Finished processing model: {}", model_cfg.query);
 }
 
-/// Logs and saves the provided HTML for debugging purposes.
+/// Log and save HTML for debugging purposes
 fn log_and_save_html(html: &str, query: &str) {
     let folder = Path::new("logs/html");
     if let Err(e) = fs::create_dir_all(folder) {
@@ -278,4 +355,68 @@ fn log_and_save_html(html: &str, query: &str) {
     } else {
         info!("Saved debug HTML: {}", filename.display());
     }
+}
+
+/// Setup preliminary panic hook (before Telegram notifier is available)
+fn setup_panic_hook_preliminary() {
+    std::panic::set_hook(Box::new(|panic_info| {
+        let payload = panic_info.payload();
+        let message = if let Some(s) = payload.downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Unknown panic payload".to_string()
+        };
+        
+        let location = if let Some(loc) = panic_info.location() {
+            format!("{}:{}:{}", loc.file(), loc.line(), loc.column())
+        } else {
+            "Unknown location".to_string()
+        };
+        
+        error!("🚨 PANIC: {} at {}", message, location);
+        eprintln!("🚨 PANIC: {} at {}", message, location);
+    }));
+}
+
+/// Setup enhanced panic hook that sends notifications to Telegram
+fn setup_panic_hook_with_telegram(notifier: Arc<TelegramNotifier>) {
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let payload = panic_info.payload();
+        let message = if let Some(s) = payload.downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Unknown panic payload".to_string()
+        };
+        
+        let location = if let Some(loc) = panic_info.location() {
+            format!("{}:{}:{}", loc.file(), loc.line(), loc.column())
+        } else {
+            "Unknown location".to_string()
+        };
+        
+        let panic_message = format!(
+            "🚨 <b>CRITICAL PANIC</b>\n\n\
+             <b>Message:</b> {}\n\
+             <b>Location:</b> {}\n\n\
+             The application may be unstable. Please check logs.",
+            message, location
+        );
+        
+        error!("🚨 PANIC: {} at {}", message, location);
+        eprintln!("🚨 PANIC: {} at {}", message, location);
+        
+        // Try to send panic notification to Telegram
+        // We need to use blocking here because panic hooks can't be async
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let notifier_clone = notifier.clone();
+        if let Err(e) = rt.block_on(async move {
+            notifier_clone.notify_text(&panic_message).await
+        }) {
+            eprintln!("Failed to send panic notification to Telegram: {:?}", e);
+        }
+    }));
 }

@@ -1,0 +1,39 @@
+services:
+  klein-sniper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: klein-sniper
+    restart: unless-stopped
+    
+    volumes:
+      # Монтируем конфиг
+      - ./config.json:/app/config.json:ro
+      # Монтируем данные для персистентности
+      - sniper-data:/app/data
+    
+    environment:
+      - RUST_LOG=info
+      - TZ=Europe/Berlin
+    
+    # Ограничения ресурсов
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    
+    # Логи
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  sniper-data:
+    driver: local
+

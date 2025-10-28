@@ -1,22 +1,19 @@
 pub mod sender;
-pub mod listener;
 pub mod command_handler;
 pub mod statistics;
 
 use crate::model::{NotifyError, Offer};
 use crate::storage::SqliteStorage;
 use crate::config::AppConfig;
-use reqwest::Client;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify};
-use std::sync::atomic::AtomicI64;
 use std::time::Instant;
+use teloxide::prelude::*;
 
+#[derive(Clone)]
 pub struct TelegramNotifier {
-    pub bot_token: String,
-    pub chat_id: i64,
-    pub client: Client,
-    pub offset: Arc<AtomicI64>,
+    pub bot: Bot,
+    pub chat_id: ChatId,
     pub storage: Arc<Mutex<SqliteStorage>>,
     pub config: Arc<AppConfig>,
     pub start_time: Instant,
@@ -31,15 +28,10 @@ impl TelegramNotifier {
         config: Arc<AppConfig>,
         refresh_notify: Arc<Notify>,
     ) -> Self {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .expect("❗ Failed to create HTTP client");
+        let bot = Bot::new(bot_token);
         Self {
-            bot_token: bot_token.clone(),
-            chat_id,
-            client,
-            offset: Arc::new(AtomicI64::new(0)),
+            bot,
+            chat_id: ChatId(chat_id),
             storage,
             config,
             start_time: Instant::now(),
@@ -47,7 +39,7 @@ impl TelegramNotifier {
         }
     }
 
-    pub async fn notify_text(&self, text: &str) -> Result<(), reqwest::Error> {
+    pub async fn notify_text(&self, text: &str) -> Result<(), NotifyError> {
         sender::send_text(self, text).await
     }
 
@@ -55,35 +47,40 @@ impl TelegramNotifier {
         sender::send_offer(self, offer).await
     }
 
-    pub async fn listen_for_commands(&self) {
-        listener::listen_for_commands(self).await;
-    }
-
-    pub async fn set_my_commands(&self) -> Result<(), reqwest::Error> {
-        let url = format!("https://api.telegram.org/bot{}/setMyCommands", self.bot_token);
-        let commands = serde_json::json!({
-            "commands": [
-                { "command": "ping", "description": "Check connection" },
-                { "command": "status", "description": "Show analyzer status" },
-                { "command": "help", "description": "Command list" },
-                { "command": "last", "description": "Show last great offer" },
-                { "command": "top5", "description": "Top 5 offers" },
-                { "command": "avg", "description": "Average price" },
-                { "command": "config", "description": "Current configuration" },
-                { "command": "refresh", "description": "Manual restart" },
-                { "command": "uptime", "description": "Service uptime" }
-            ]
-        });
-        self.client.post(&url).json(&commands).send().await?;
-        Ok(())
-    }
-
+    /// Запускает бота для прослушивания команд в отдельной задаче
     pub fn spawn_listener(notifier: Arc<TelegramNotifier>) {
         tokio::spawn(async move {
             tracing::info!("▶️ Starting Telegram listener...");
-            notifier.listen_for_commands().await;
+            
+            // Устанавливаем команды меню бота
+            if let Err(e) = notifier.set_my_commands().await {
+                tracing::warn!("Failed to set bot commands: {:?}", e);
+            }
+            
+            // Запускаем обработчик команд
+            command_handler::run_bot(notifier).await;
+            
             tracing::info!("🛑 Telegram listener ended.");
         });
+    }
+
+    async fn set_my_commands(&self) -> Result<(), teloxide::RequestError> {
+        use teloxide::types::BotCommand;
+        
+        let commands = vec![
+            BotCommand::new("ping", "Check connection"),
+            BotCommand::new("status", "Show analyzer status"),
+            BotCommand::new("help", "Command list"),
+            BotCommand::new("last", "Show last great offer"),
+            BotCommand::new("top5", "Top 5 offers"),
+            BotCommand::new("avg", "Average price"),
+            BotCommand::new("config", "Current configuration"),
+            BotCommand::new("refresh", "Manual restart"),
+            BotCommand::new("uptime", "Service uptime"),
+        ];
+        
+        self.bot.set_my_commands(commands).await?;
+        Ok(())
     }
 
     pub async fn check_and_notify_cheapest_for_model(

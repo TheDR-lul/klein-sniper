@@ -1,0 +1,35 @@
+# Git
+.git
+.gitignore
+
+# Rust
+target/
+**/*.rs.bk
+*.pdb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+
+# Database
+*.db
+*.db-wal
+*.db-shm
+
+# Config (должен быть предоставлен при запуске)
+config.json
+
+# Documentation
+*.md
+LICENSE
+
+# CI/CD
+.github/
+

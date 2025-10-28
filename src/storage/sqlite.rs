@@ -2,15 +2,20 @@ use crate::model::{ModelStats, Offer, StorageError};
 use chrono::{DateTime, Duration, Utc, NaiveDateTime, TimeZone};
 use rusqlite::{params, Connection, Row};
 use std::collections::HashMap;
+use tracing::{info, warn};
 
 pub struct SqliteStorage {
     conn: Connection,
 }
 
 impl SqliteStorage {
-    /// Создаёт новое хранилище, открывая соединение к БД и выполняя миграции
+    /// Create new storage, open DB connection and run migrations
     pub fn new(db_path: &str) -> Result<Self, StorageError> {
         let conn = Connection::open(db_path)?;
+        
+        // Enable WAL mode for better concurrent access
+        conn.execute("PRAGMA journal_mode=WAL", [])?;
+        conn.execute("PRAGMA synchronous=NORMAL", [])?;
 
         conn.execute_batch(
             "
@@ -37,6 +42,13 @@ impl SqliteStorage {
                 std_dev REAL NOT NULL,
                 last_updated TEXT NOT NULL
             );
+            
+            -- Создание индексов для оптимизации запросов
+            CREATE INDEX IF NOT EXISTS idx_offers_model ON offers(model);
+            CREATE INDEX IF NOT EXISTS idx_offers_price ON offers(price);
+            CREATE INDEX IF NOT EXISTS idx_offers_fetched_at ON offers(fetched_at);
+            CREATE INDEX IF NOT EXISTS idx_offers_model_price ON offers(model, price);
+            CREATE INDEX IF NOT EXISTS idx_notified_at ON notified(notified_at);
             "
         )?;
 
@@ -346,4 +358,122 @@ impl SqliteStorage {
             user_url,
         })
     }
+    
+    /// Clean up old offers based on retention period
+    pub fn cleanup_old_offers(&self, retention_days: u32) -> Result<usize, StorageError> {
+        if retention_days == 0 {
+            info!("Offer retention is disabled (0 days), skipping cleanup");
+            return Ok(0);
+        }
+        
+        let cutoff_date = Utc::now() - Duration::days(retention_days as i64);
+        let cutoff_str = cutoff_date.to_rfc3339();
+        
+        info!("Cleaning up offers older than {} days (before {})", retention_days, cutoff_str);
+        
+        let deleted = self.conn.execute(
+            "DELETE FROM offers WHERE fetched_at < ?1",
+            params![cutoff_str],
+        )?;
+        
+        info!("Deleted {} old offers", deleted);
+        Ok(deleted)
+    }
+    
+    /// Clean up old stats based on retention period
+    pub fn cleanup_old_stats(&self, retention_days: u32) -> Result<usize, StorageError> {
+        if retention_days == 0 {
+            info!("Stats retention is disabled (0 days), skipping cleanup");
+            return Ok(0);
+        }
+        
+        let cutoff_date = Utc::now() - Duration::days(retention_days as i64);
+        let cutoff_str = cutoff_date.to_rfc3339();
+        
+        info!("Cleaning up stats older than {} days (before {})", retention_days, cutoff_str);
+        
+        let deleted = self.conn.execute(
+            "DELETE FROM model_stats WHERE last_updated < ?1",
+            params![cutoff_str],
+        )?;
+        
+        info!("Deleted {} old stats records", deleted);
+        Ok(deleted)
+    }
+    
+    /// Clean up orphaned notification records (offers no longer exist)
+    pub fn cleanup_orphaned_notifications(&self) -> Result<usize, StorageError> {
+        info!("Cleaning up orphaned notification records");
+        
+        let deleted = self.conn.execute(
+            "DELETE FROM notified WHERE offer_id NOT IN (SELECT id FROM offers)",
+            [],
+        )?;
+        
+        info!("Deleted {} orphaned notification records", deleted);
+        Ok(deleted)
+    }
+    
+    /// Run full cleanup (offers, stats, notifications)
+    pub fn run_full_cleanup(&self, offer_retention_days: u32, stats_retention_days: u32) -> Result<(), StorageError> {
+        info!("Running full database cleanup...");
+        
+        let offers_deleted = self.cleanup_old_offers(offer_retention_days)?;
+        let stats_deleted = self.cleanup_old_stats(stats_retention_days)?;
+        let notifications_deleted = self.cleanup_orphaned_notifications()?;
+        
+        // VACUUM to reclaim space
+        info!("Running VACUUM to reclaim disk space...");
+        self.conn.execute("VACUUM", [])?;
+        
+        info!(
+            "Cleanup complete: {} offers, {} stats, {} notifications removed",
+            offers_deleted, stats_deleted, notifications_deleted
+        );
+        
+        Ok(())
+    }
+    
+    /// Get database statistics
+    pub fn get_database_stats(&self) -> Result<DatabaseStats, StorageError> {
+        let offer_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM offers",
+            [],
+            |row| row.get(0),
+        )?;
+        
+        let notified_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM notified",
+            [],
+            |row| row.get(0),
+        )?;
+        
+        let stats_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM model_stats",
+            [],
+            |row| row.get(0),
+        )?;
+        
+        let db_size: i64 = self.conn.query_row(
+            "SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()",
+            [],
+            |row| row.get(0),
+        )?;
+        
+        Ok(DatabaseStats {
+            offer_count: offer_count as usize,
+            notified_count: notified_count as usize,
+            stats_count: stats_count as usize,
+            db_size_bytes: db_size as usize,
+        })
+    }
+}
+
+/// Database statistics
+#[derive(Debug, Clone)]
+pub struct DatabaseStats {
+    pub offer_count: usize,
+    pub notified_count: usize,
+    pub stats_count: usize,
+    pub db_size_bytes: usize,
 }

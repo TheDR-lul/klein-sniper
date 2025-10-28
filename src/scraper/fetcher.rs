@@ -4,28 +4,45 @@ use reqwest::{Client, header};
 use rand::prelude::*;
 use scraper::{Html, Selector};
 use tokio::time::{sleep, Duration};
-
-const USER_AGENTS: [&str; 5] = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.159 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 6.1; WOW64; rv:78.0) Gecko/20100101 Firefox/78.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/91.0.864.64 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36",
-];
+use governor::{Quota, RateLimiter, clock::DefaultClock, state::{InMemoryState, NotKeyed}};
+use std::num::NonZeroU32;
+use std::sync::Arc;
+use backoff::{ExponentialBackoff, future::retry};
+use tracing::{info, warn};
 
 pub struct ScraperImpl {
     pub client: Client,          
     pub category_id: String, 
     pub min_price: f64,          
-    pub max_price: f64,          
+    pub max_price: f64,
+    pub max_pages: usize,
+    pub delay_seconds: u64,
+    pub max_retries: u32,
+    rate_limiter: Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
 }
 
 impl ScraperImpl {
     pub fn new() -> Self {
-        let random_user_agent = USER_AGENTS.choose(&mut rand::rng()).unwrap();
+        Self::with_config(&[], 20, 1, 3, 30)
+    }
+    
+    pub fn with_config(
+        user_agents: &[String],
+        max_pages: usize,
+        delay_seconds: u64,
+        max_retries: u32,
+        requests_per_minute: u32,
+    ) -> Self {
+        let default_agents = vec![
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36".to_string(),
+        ];
+        
+        let agents = if user_agents.is_empty() { &default_agents } else { user_agents };
+        let random_user_agent = agents.choose(&mut rand::rng()).unwrap();
 
         let client = Client::builder()
-            .user_agent(random_user_agent.to_string())
+            .user_agent(random_user_agent.as_str())
+            .timeout(Duration::from_secs(30))
             .default_headers({
                 let mut headers = header::HeaderMap::new();
                 headers.insert(header::ACCEPT_LANGUAGE, "en-US,en;q=0.9".parse().unwrap());
@@ -35,21 +52,23 @@ impl ScraperImpl {
             .build()
             .unwrap();
 
+        // Create rate limiter: requests_per_minute requests per 60 seconds
+        let quota = Quota::per_minute(NonZeroU32::new(requests_per_minute).unwrap());
+        let rate_limiter = Arc::new(RateLimiter::direct(quota));
+
         Self {
             client,
             category_id: String::new(),
             min_price: 0.0,
             max_price: 0.0,
+            max_pages,
+            delay_seconds,
+            max_retries,
+            rate_limiter,
         }
     }
 
-    /// Builds the URL for the request.
-    /// If price filters are set (min_price > 0.0 or max_price > 0.0),
-    /// then for the first page the URL is in the form:
-    ///   https://www.kleinanzeigen.de/s-preis:{min_price}:{max_price}/{query}/{category_id}
-    /// and for subsequent pages:
-    ///   https://www.kleinanzeigen.de/s-preis:{min_price}:{max_price}/seite:{page}/{query}/{category_id}
-    /// Otherwise, the basic URL format is used.
+    /// Build the URL for the request
     fn build_url(&self, req: &ScrapeRequest, page: usize) -> String {
         let kebab_query = req.query.to_lowercase().replace(" ", "-");
         if self.min_price > 0.0 || self.max_price > 0.0 {
@@ -74,7 +93,65 @@ impl ScraperImpl {
     }
 
     async fn apply_delay(&self) {
-        sleep(Duration::from_secs(1)).await;
+        sleep(Duration::from_secs(self.delay_seconds)).await;
+    }
+    
+    /// Fetch URL with retry logic and rate limiting
+    async fn fetch_with_retry(&self, url: &str) -> Result<String, ScraperError> {
+        // Wait for rate limiter
+        self.rate_limiter.until_ready().await;
+        
+        if self.max_retries == 0 {
+            // No retry logic, fetch once
+            return self.fetch_once(url).await;
+        }
+        
+        // Use exponential backoff for retries
+        let backoff = ExponentialBackoff {
+            max_elapsed_time: Some(Duration::from_secs(300)), // 5 minutes max
+            ..Default::default()
+        };
+        
+        let operation = || async {
+            match self.fetch_once(url).await {
+                Ok(html) => Ok(html),
+                Err(e) => {
+                    warn!("Fetch failed for {}: {:?}, retrying...", url, e);
+                    Err(backoff::Error::transient(e))
+                }
+            }
+        };
+        
+        retry(backoff, operation)
+            .await
+            .map_err(|e| match e {
+                backoff::Error::Permanent(err) => err,
+                backoff::Error::Transient { err, .. } => err,
+            })
+    }
+    
+    /// Single fetch attempt without retry
+    async fn fetch_once(&self, url: &str) -> Result<String, ScraperError> {
+        let response = self.client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| ScraperError::HttpError(e.to_string()))?;
+        
+        let status = response.status();
+        
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_else(|_| "unknown".into());
+            return Err(ScraperError::InvalidResponse(format!(
+                "HTTP {}: {}",
+                status, body
+            )));
+        }
+        
+        response
+            .text()
+            .await
+            .map_err(|e| ScraperError::HttpError(e.to_string()))
     }
 }
 
@@ -87,34 +164,27 @@ impl Scraper for ScraperImpl {
         let ad_id_selector = Selector::parse("article.aditem").unwrap();
 
         let mut last_first_ad_id: Option<String> = None;
-        let max_pages = 20;
 
-        for page in 1..=max_pages {
+        for page in 1..=self.max_pages {
             self.apply_delay().await;
             let url = self.build_url(req, page);
-            tracing::info!("Fetching page {}: {}", page, url);
+            info!("Fetching page {} with retry logic: {}", page, url);
 
-            let response = match self.client.get(&url).send().await {
-                Ok(resp) => resp,
-                Err(e) => return Err(ScraperError::HttpError(e.to_string())),
+            // Fetch with retry and rate limiting
+            let html = match self.fetch_with_retry(&url).await {
+                Ok(html) => html,
+                Err(e) => {
+                    warn!("Failed to fetch page {}: {:?}", page, e);
+                    return Err(e);
+                }
             };
-
-            let status = response.status();
-            let html = match response.text().await {
-                Ok(t) => t,
-                Err(e) => return Err(ScraperError::HttpError(e.to_string())),
-            };
-
-            if !status.is_success() {
-                return Err(ScraperError::InvalidResponse(html));
-            }
 
             let doc = Html::parse_document(&html);
             let items: Vec<_> = doc.select(&item_selector).collect();
-            tracing::info!("Parsed {} items from page {}", items.len(), page);
+            info!("Parsed {} items from page {}", items.len(), page);
 
             if items.is_empty() {
-                tracing::info!("No items found on page {}, stopping.", page);
+                info!("No items found on page {}, stopping.", page);
                 break;
             }
 
@@ -126,7 +196,7 @@ impl Scraper for ScraperImpl {
 
             if let (Some(current), Some(last)) = (&first_ad_id, &last_first_ad_id) {
                 if current == last {
-                    tracing::info!("Duplicate first item detected on page {}, stopping.", page);
+                    info!("Duplicate first item detected on page {}, stopping.", page);
                     break;
                 }
             }
